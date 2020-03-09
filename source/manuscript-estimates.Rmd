@@ -114,6 +114,9 @@ mean(loocv_dat$mean) - mean(loocv_dat$truth)
 
 print("LOOCV MAE")
 mean(abs(loocv_dat$mean-loocv_dat$truth))
+
+print("LOOCV relative MAE versus naive model")
+mean(abs(loocv_dat$mean-loocv_dat$truth)) / mean(abs(loocv_dat$mean_others_mean-loocv_dat$truth))
 ```
 
 ```{r inla rr and total}

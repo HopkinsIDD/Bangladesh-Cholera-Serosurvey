@@ -116,7 +116,8 @@ sensitivity_est_200 <- results_200$sens_tv
 
 ## load analysis data
 analysis_data <- readRDS("generated_data/serosurvey-with-rf-preds.rds") %>% 
-    mutate(div_name=gsub(" Division", "", Division_name))
+    mutate(div_name=gsub(" Division", "", Division_name),
+           vib_320=vibinab>=320 | vibogaw>=320)
 
 ## load cohort data with RF preds
 cohort_data <- find_recent_file("cohort-w-rf-preds-365-youden",
