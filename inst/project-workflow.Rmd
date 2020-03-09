@@ -1,0 +1,62 @@
+---
+title: "Project Workflow"
+author: "Andrew Azman and Stephen Lauer"
+date: "7/5/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir=here::here())
+```
+
+## Overview
+
+This is a guide for running the necessary code to run the analyses for ``Vibrio Cholerae Transmission in Bangladesh: Insights from a Nationally-Representative Serosurvey'' and its associated figures and tables.
+
+To estimate the proportion of the population infected by _Vibrio cholerae_ O1 in the previous year (which we refer to as `seropositive' in the paper), we use a recently validated machine learning model adjusted and adjust estimates by its estimated sensitivity (time-varying) and specificity. 
+We fit the random forest model using age, sex, vibriocidal titers (Ogawa and Inaba), anti-LPS IgG and IgA antibodies and anti-CTB IgG and IgA antibodies to classify the seropositive status of individuals from a previously conducted cohort study in Bangladesh.
+Methods are described in Azman et al (2019, Science Translational Medicine).
+We then use this random forest model to predict the seropositive status for individuals from the serosurvey.
+Since this model is imperfect, we adjusted our estimates for the sensitivity and specificity of the random forest model estimates.
+The sensitivity of the estimates, like the vibriocidal titers, vary with time since infection.
+We model the sensitivity using a logit-normal regression with a cubic polynomial function on the log of the time since infection.
+
+## Data
+
+We pull the cohort data used for fitting the original classification models from the public GitHub repository for ``Estimating cholera incidence with cross-sectional serology.''
+
+```{r cohort data, eval=FALSE}
+source("source/install-packages-dl-data.R")
+```
+
+We then create the primary dataset from this serosurvey by bringing in the survey questionaire data, the serological data, predictions for recent infection and some ecological covariates in `source/generate-analyses-dataset.R`, however the code itself cannot be run as we do not provide the raw data as they are quite messy (contact azman@jhu.edu if you would like these). The cleaned serology data, merged with the data from the survey are saved as `generated_data/serosurvey-with-rf-preds.rds`.
+
+```{r sero data, eval=FALSE}
+source("source/generate-analyses-dataset.R")
+sero_dat <- readRDS("generated_data/serosurvey-with-rf-preds.rds")
+```
+
+## Run Stan models
+
+The code to run the Stan models is saved as `source/bgd-adjusted-stan.R`.
+By using `inst/run-analysis.sh` (or `inst/run-analysis-cluster.sh` for a SLURM cluster), the Stan models are run for both random forests and vibriocidal models for 100, 200, and 365 days.
+
+## Make INLA maps
+
+To make the maps and final estimates, we plug in the posterior estimates from the Stan model into INLA models to generate a set of maps to estimate the incidence in each 5km by 5km grid cell for Bangladesh.
+To do this, we use the shell script `inst/run-boot-gridmap.sh`, which repeatedly calls `source/sampling_uncert_gridmap.R`.
+Note that this can take a week, running in parallel (6 maps at a time).
+
+We also use INLA models to estimate the effect of various risk factors, such as age, sex, travel history, population density, and urban or rural.
+This code is located in `source/risk_factors_and_model_comp.Rmd`.
+
+## Main Stats in Paper
+
+After running the above scripts, first generate the supplement document `source/supplement.Rmd` before running the estimates for the manuscript `source/manuscript-estimates.R`.
+
+## Main Figures/Tables
+
+```{r}
+sessionInfo()
+```
