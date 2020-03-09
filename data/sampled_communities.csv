@@ -1,0 +1,71 @@
+CommunityID,zl,uz,un_wa,mz_mh,vill,rmo,community,Upazila.name,Zila_name,Division_name,pop_both,Lat,Long
+11,4,9,3,400,NA,2,*Kontakata(Dakshin),Amtali Upazila,Barguna Zila,Barisal Division,2718,90.23453333,22.12925667
+12,4,85,47,586,NA,1,*Kanthaltali,Patharghata Upazila,Barguna Zila,Barisal Division,6915,89.92668833,22.14467167
+13,9,29,95,190,NA,1,*Char Bara Lamchhi Dhali,Daulatkhan Upazila,Bhola Zila,Barisal Division,10786,90.74920167,22.58495667
+14,79,58,86,618,1,1,Dakshin Kumirmara,Mathbaria Upazila,Pirojpur Zila,Barisal Division,1720,90.01959167,22.26684667
+15,13,95,60,391,NA,1,*Kakairtala,Shahrasti Upazila,Chandpur Zila,Chittagong Division,1156,90.97755667,23.25756333
+16,15,57,8,850,NA,2,*Rahmannagar,Panchlaish Thana,Chittagong Zila,Chittagong Division,4566,91.81983333,22.37256667
+17,15,78,40,433,NA,3,*Harispur,Sandwip Upazila,Chittagong Zila,Chittagong Division,3529,91.43743667,22.51457333
+18,15,28,24,200,NA,2,*Askarabad,Double Mooring Thana,Chittagong Zila,Chittagong Division,8719,91.81024167,22.338445
+19,15,47,18,123,NA,1,*Barahatia,Lohagara Upazila,Chittagong Zila,Chittagong Division,21809,92.05017667,22.01031
+20,15,8,5,808,NA,2,*Talukder Para,Banskhali Upazila,Chittagong Zila,Chittagong Division,623,91.95263667,22.01035167
+21,19,40,83,917,3,1,Saharpar,Debidwar Upazila,Comilla Zila,Chittagong Division,1384,90.91304333,23.50959
+22,19,81,54,572,2,1,Rampur,Muradnagar Upazila,Comilla Zila,Chittagong Division,768,90.897755,23.67188
+23,19,9,11,762,NA,1,*Pilgiri,Barura Upazila,Comilla Zila,Chittagong Division,3832,90.96718167,23.33085833
+24,22,66,19,255,4,1,Jumchhari,Ramu Upazila,Cox's Bazar Zila,Chittagong Division,2068,92.18755333,21.47397333
+25,30,41,81,76203,NA,1,Fokhirar Khil,Fulgazi Upazila,Feni Zila,Chittagong Division,524,91.40654667,23.09786167
+26,30,41,67,580,NA,1,*Paschim Ghaniamora,Fulgazi Upazila,Feni Zila,Chittagong Division,1169,91.430555,23.16593667
+27,30,51,3,16,NA,2,*Anantapur,Parshuram Upazila,Feni Zila,Chittagong Division,3951,91.43274,23.20835167
+28,75,7,84,831,NA,1,*Rasulpur,Begumganj Upazila,Noakhali Zila,Chittagong Division,7601,91.18109,22.9525
+29,75,87,85,645,NA,1,*Noannai,Noakhali Sadar (Sudharam) Upazila,Noakhali Zila,Chittagong Division,4041,91.05164167,22.86283
+30,75,87,45,68,NA,1,*Baraipur,Noakhali Sadar (Sudharam) Upazila,Noakhali Zila,Chittagong Division,6579,91.02952,22.83834333
+31,75,7,80,12,NA,1,*Aladinagar,Begumganj Upazila,Noakhali Zila,Chittagong Division,9527,91.05295833,22.89805
+32,75,83,73,403,NA,1,*Hatgaon,Sonaimuri Upazila,Noakhali Zila,Chittagong Division,4337,91.04909833,23.05107333
+33,26,54,32,209,NA,2,*Fakira Pool,Motijheel Thana,Dhaka Zila,Dhaka Division,22727,90.41652167,23.73216333
+34,26,30,15,495,NA,2,*Lalashari,Kafrul Thana,Dhaka Zila,Dhaka Division,32125,NA,NA
+35,26,38,94,867,6,1,Kaybarta Para (Islamabad),Keraniganj Upazila,Dhaka Zila,Dhaka Division,3093,90.40344167,23.70024167
+36,26,32,95,497,7,3,Mohammadbagh,Kadamtali Thana,Dhaka Zila,Dhaka Division,13258,90.45772333,23.688015
+37,29,10,63,885,NA,1,*Sekhpura,Bhanga Upazila,Faridpur Zila,Dhaka Division,1565,90.05272,23.40852833
+38,59,24,73,586,NA,1,*Malliker Char,Gazaria Upazila,Munshiganj Zila,Dhaka Division,922,90.623085,23.49929167
+39,61,22,94,132,NA,1,*Barabari,Gaffargaon Upazila,Mymensingh Zila,Dhaka Division,1549,90.58979667,24.40633167
+40,61,16,52,340,2,1,Galaidanga,Dhobaura Upazila,Mymensingh Zila,Dhaka Division,1622,90.46253333,25.14391167
+41,61,52,67,718,2,1,Mankanda,Mymensingh Sadar Upazila,Mymensingh Zila,Dhaka Division,1113,90.32300333,24.78174667
+42,61,20,83,542,3,1,Bandasatra,Fulbaria Upazila,Mymensingh Zila,Dhaka Division,579,90.23523167,24.69175833
+43,61,22,82,935,NA,3,*Silasi,Gaffargaon Upazila,Mymensingh Zila,Dhaka Division,2560,90.53530667,24.443525
+44,68,63,4,765,NA,2,*Char Palash,Palash Upazila,Narsingdi Zila,Dhaka Division,2628,90.62275333,23.960455
+45,68,52,61,411,4,1,Tiekerkandi,Manohordi Upazila,Narsingdi Zila,Dhaka Division,1114,90.74592667,24.137055
+46,72,9,59,385,1,1,Dudhkora,Barhatta Upazila,Netrokona Zila,Dhaka Division,1831,90.77405,24.99593667
+47,82,73,4,729,NA,2,*Narayanpur (Part),Pangsha Upazila,Rajbari Zila,Dhaka Division,2909,89.41953667,23.78993833
+48,86,69,95,57,NA,1,*Baghdiguri Para,Shariatpur Sadar (Palong) Upazila,Shariatpur Zila,Dhaka Division,666,90.32598167,23.22770833
+49,93,95,11,269,NA,2,*Berabuchna,Tangail Sadar Upazila,Tangail Zila,Dhaka Division,3194,89.91429333,24.23648333
+50,93,47,80,413,NA,1,*Haora Para,Kalihati Upazila,Tangail Zila,Dhaka Division,716,89.96959,24.33281
+51,41,61,10,434,NA,1,*Jamjami,Manirampur Upazila,Jessore Zila,Khulna Division,2022,89.24914333,23.09006833
+52,41,38,85,511,NA,1,*Kariakhali,Keshabpur Upazila,Jessore Zila,Khulna Division,1246,89.169655,22.926855
+53,41,47,3,466,NA,2,*Jailkhana Area,Jessore Sadar Upazila,Jessore Zila,Khulna Division,2573,89.21284833,23.17025167
+54,44,80,75,164,NA,1,*Bhulundia,Shailkupa Upazila,Jhenaidah Zila,Khulna Division,739,89.26026333,23.73295167
+55,44,19,4,477,NA,2,*Kanchanpur,Jhenaidah Sadar Upazila,Jhenaidah Zila,Khulna Division,4500,89.16704,23.53363333
+56,47,17,52,318,2,1,Ramnagar,Dacope Upazila,Khulna Zila,Khulna Division,3334,89.50371167,22.507365
+57,47,45,12,250,NA,2,*Khalishpur H.E.(Old Colany),Khalishpur Thana,Khulna Zila,Khulna Division,16749,89.54696,22.85466667
+58,50,79,75,722,NA,1,*Nagar Mohammadpur,Kushtia Sadar Upazila,Kushtia Zila,Khulna Division,1214,89.14181167,23.87654833
+59,70,66,27,295,NA,1,*Debinagar,Chapai Nawabganj Sadar Upazila,Chapai Nawabganj Zila,Rajshahi Division,20941,88.26558167,24.524835
+60,64,47,88,435,NA,1,*Dariapur,Manda Upazila,Naogaon Zila,Rajshahi Division,1392,88.73620667,24.74171833
+61,76,83,38,988,NA,1,*Ulath Chandipur,Sujanagar Upazila,Pabna Zila,Rajshahi Division,3151,89.48232167,23.90453167
+62,76,83,38,79,1,1,Bankhola,Sujanagar Upazila,Pabna Zila,Rajshahi Division,6449,89.49739333,23.88138167
+63,76,55,69,673,NA,1,*Malanchi,Pabna Sadar Upazila,Pabna Zila,Rajshahi Division,1131,89.26721833,24.03011833
+64,76,22,86,908,2,1,Samaj Balajpur,Chatmohar Upazila,Pabna Zila,Rajshahi Division,1361,89.375795,24.280285
+65,81,22,15,905,NA,2,*Shapura Miapara,Boalia Thana,Rajshahi Zila,Rajshahi Division,1973,88.60402667,24.38138
+66,81,53,67,184,NA,1,*Bidirpur,Mohanpur Upazila,Rajshahi Zila,Rajshahi Division,557,88.61873,24.48793833
+67,32,91,37,72,NA,1,*Bazra Haldia,Sundarganj Upazila,Gaibandha Zila,Rangpur Division,2304,89.51247667,25.47036167
+68,32,91,82,27,NA,1,*Baidyanath,Sundarganj Upazila,Gaibandha Zila,Rangpur Division,6077,89.49432667,25.55482333
+69,49,8,19,468,5,1,Dhublia Para,Char Rajibpur Upazila,Kurigram Zila,Rangpur Division,835,89.81218167,25.42468333
+70,52,39,17,130,NA,1,*Bhotemari,Kaliganj Upazila,Lalmonirhat Zila,Rangpur Division,8540,89.17454667,26.00450167
+71,77,90,40,180,2,1,Nijbari,Tentulia Upazila,Panchagarh Zila,Rangpur Division,1835,88.49313167,26.46725167
+72,77,25,58,920,NA,1,*Shikarpur,Boda Upazila,Panchagarh Zila,Rangpur Division,461,88.65499333,26.28850167
+73,77,90,81,663,3,1,Danga Para,Tentulia Upazila,Panchagarh Zila,Rangpur Division,858,88.35192333,26.48718
+74,85,76,95,177,2,1,Char Para,Pirganj Upazila,Rangpur Zila,Rangpur Division,312,89.158015,25.40948
+75,85,42,67,820,2,1,Char Sabdi,Kaunia Upazila,Rangpur Zila,Rangpur Division,1769,89.39329167,25.78172833
+76,85,73,85,948,NA,1,*Taluk Kandi Natabari,Pirgachha Upazila,Rangpur Zila,Rangpur Division,1999,89.45551,25.63079333
+77,94,8,31,114,NA,1,*Bara Palashbari,Baliadangi Upazila,Thakurgaon Zila,Rangpur Division,7493,88.21617167,26.061985
+78,36,68,54,966,NA,3,*Swajangaon,Lakhai Upazila,Habiganj Zila,Sylhet Division,7299,91.20083333,24.28608667
+79,58,74,94,772,3,1,Padunapur,Maulvibazar Sadar Upazila,Maulvibazar Zila,Sylhet Division,1117,91.66201167,24.52363333
+80,58,74,14,72,1,1,Atgaon,Maulvibazar Sadar Upazila,Maulvibazar Zila,Sylhet Division,1149,91.717515,24.483815
