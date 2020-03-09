@@ -1,0 +1,795 @@
+---
+title: "Infection Risk Factors and Model Comparison"
+author: "Andrew Azman and Stephen Lauer"
+date: "15-Jan-2020"
+output: 
+  pdf_document: 
+    keep_tex: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,error = FALSE,warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+## Some Setup
+
+```{r preamble, include=FALSE}
+library(pacman)
+source("source/utils.R")
+reload_source()
+p_load(INLA,flextable,officer)
+```
+
+Let's add a little helper function for running some of the models:
+
+```{r helper}
+## define a few helper functions for later
+##' helper for running inla models
+##' @param formula1 
+##' @param data 
+##' @return 
+run_inla_model<-function(formula1,my_data,my_spde){
+    output <- inla(formula1,
+                   data=inla.stack.data(my_data, spde=my_spde),
+                   family=c("binomial"),
+                   Ntrials=1,
+                   control.predictor=list(A=inla.stack.A(my_data),compute=TRUE),
+                   control.compute=list(dic=TRUE))
+    return(output)
+}
+
+```
+
+### Data
+
+First, we will load data from the survey:
+
+```{r data}
+## load data for analyses
+serosurvey_dat <- readRDS("generated_data/serosurvey-with-rf-preds.rds") %>% 
+    left_join(readRDS("data/community-data.rds")) %>% 
+    mutate(age_group=cut(age,c(0,4,14,100),labels = 1:3),
+           pred_365 = ifelse(pred_365==TRUE,1,0) %>% as.numeric,
+           pred_200 = ifelse(pred_200==TRUE,1,0),
+           pred_100 = ifelse(pred_100==TRUE,1,0))
+```
+
+### Setting up SPDE 
+First we need to set up our SPDE spatial mesh (`spde`) and the spatial indices (`s_index`). 
+
+```{r spde}
+hhl_locs_ll <- serosurvey_dat %>%
+    select(lon,lat,hhid,community_id) %>% 
+    st_as_sf(coords = c("lon","lat"),
+             crs="+proj=longlat +datum=WGS84 +no_defs")
+
+hhl_locs_btm <- hhl_locs_ll %>% transform_to_btm() %>% st_coordinates
+serosurvey_dat$hhl_easting <- hhl_locs_btm[,"X"]
+serosurvey_dat$hhl_northing <- hhl_locs_btm[,"Y"]
+
+## MESH
+## Build mesh around household coordinates 
+bnd <- inla.nonconvex.hull(hhl_locs_btm,convex=-0.1) ## inla mesh segment
+
+bgd0 <- load_bgd_shp(level=0) %>%
+    transform_to_btm() 
+
+#meshbuilder() ## shiny app
+mesh <- inla.mesh.2d(boundary = bnd  ,
+                     loc=hhl_locs_btm,
+                     offset=c(-0.05, -0.05),
+                     cutoff = 2000, ## if households are less than 2km apart, builds only a single vertex
+                     max.edge=c(30000,50000))
+
+## let's have a quick look at the mesh
+plot(mesh,asp=1,main="hhl")
+points(hhl_locs_btm[,"X"],hhl_locs_btm[,"Y"],pch=19,cex=0.5,col="orange")
+
+## now make the SPDE model on the mesh
+spde <- inla.spde2.matern(mesh=mesh, alpha=2) # alpha is Fractional operator order
+s_index <- inla.spde.make.index(name="spatial.field",n.spde=spde$n.spde) 
+```
+
+Now let's build the main stack/scaffolding for the model. First we will restrict to observations we have complete data for.
+
+```{r stack}
+## we lose 17 that  we don't have
+## serological predictions for and then
+## another 12 are missing incomeSumm
+dat_no_na_riskfactors <- serosurvey_dat %>%
+    select("pred_365",
+           "pred_200",
+           "pred_100",
+           "age_group",
+           "sex",
+           "elec",
+           "ownerHH",
+           "land",
+           "educationSumm",
+           "incomeSumm",
+           "altitude",
+           "travel",
+           "logpop",
+           "urban",
+           "travel_time",
+           "poverty",
+           "distance_to_water",
+           "community_id",
+           "hhl_easting",
+           "hhl_northing",
+           "community_id","hhid"
+    ) %>%
+    mutate(educationSumm=relevel(educationSumm, "4"),
+           age_group=relevel(age_group, "3"),
+           incomeSumm=relevel(incomeSumm, "3")) %>% 
+    na.omit
+
+## observation/prediction matrix
+A_est_multi <- inla.spde.make.A(mesh=mesh,
+                                loc=dat_no_na_riskfactors %>%
+                                    select(hhl_easting,hhl_northing) %>%
+                                    as.matrix)
+
+## first we need to create the stack data for estimation
+model_matrix <- model.matrix(~age_group+sex+elec+travel+ownerHH+land+
+                                 educationSumm+logpop+incomeSumm+altitude+
+                                 poverty+urban+
+                                 travel_time+poverty+distance_to_water,
+                             dat_no_na_riskfactors)[, -1]
+
+## creating a stack called "est"
+stack_est_multi <- inla.stack(
+    data=list(y=dat_no_na_riskfactors[,'pred_365'] %>% unlist), ## response
+    A=list(A_est_multi, 1,1,1), ## projector matrix
+    effects=list(s_index,
+                 data.frame(Intercept=1,model_matrix), 
+                 list(village.index=dat_no_na_riskfactors$community_id),
+                 list(hh.index=dat_no_na_riskfactors$hhid)),
+    tag="est")
+```
+
+
+## Univariate regresssion models using individual-level data 
+
+Now let's run a bunch of univariate models for the random forest model
+outcomes including village- and household-level random effects in
+addtion to the Matern spatial covariance function:
+
+```{r univariate individual, cache=TRUE}
+set.seed(1)
+formula_age <- y~-1+Intercept+age_group1+age_group2+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_age <- run_inla_model(formula_age,stack_est_multi,my_spde=spde)
+
+formula_altitude <- y~-1+Intercept+altitude+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_altitude <- run_inla_model(formula_altitude,stack_est_multi,my_spde=spde)
+
+formula_sex <- y~-1+Intercept+sexMale+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_sex <- run_inla_model(formula_sex,stack_est_multi,my_spde=spde)
+
+formula_elec <- y~-1+Intercept+elecTRUE+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_elec <- run_inla_model(formula_elec,stack_est_multi,my_spde=spde)
+
+formula_owner <- y~-1+Intercept+ownerHHTRUE+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_owner <- run_inla_model(formula_owner,stack_est_multi,my_spde=spde)
+
+formula_land <- y~-1+Intercept+landTRUE+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_land <- run_inla_model(formula_land,stack_est_multi,my_spde=spde)
+
+formula_edu <- y~-1+Intercept+educationSumm3+educationSumm2+educationSumm1+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_edu <- run_inla_model(formula_edu,stack_est_multi,my_spde=spde)
+
+formula_income <- y~-1+Intercept+incomeSumm2+incomeSumm1+incomeSumm4+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_income <- run_inla_model(formula_income,stack_est_multi,my_spde=spde)
+
+formula_travel <- y~-1+Intercept+travel1+travel2+travel3+
+    f(village.index, model="iid")+
+    f(hh.index, model="iid")+
+    f(spatial.field, model=spde)
+model_travel <- run_inla_model(formula_travel,stack_est_multi,my_spde=spde)
+
+formula_pop <- y~-1+Intercept+logpop+
+    f(village.index, model="iid")+f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_pop <- run_inla_model(formula_pop,stack_est_multi,my_spde=spde)
+
+## urban based on census classifications
+formula_urban <- y~-1+Intercept+urbanTRUE+
+    f(village.index, model="iid")+f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_urban <- run_inla_model(formula_urban,stack_est_multi,my_spde=spde)
+
+## how about an interaction tern with pop and urban?
+formula_pop_cross_urban <- y~-1+Intercept+urbanTRUE+logpop+urbanTRUE:logpop+
+    f(village.index, model="iid")+f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_pop_cross_urban <- run_inla_model(formula_pop_cross_urban,stack_est_multi,my_spde=spde)
+
+## don't want to include friction and travel time as they are transformations of one another.
+## chosing travel time due to interpretability and no real difference in niceness of dist
+formula_travel_time <- y~-1+Intercept+travel_time+
+    f(village.index, model="iid")+f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_travel_time <- run_inla_model(formula_travel_time,stack_est_multi,my_spde=spde)
+
+formula_poverty <- y~-1+Intercept+poverty+
+    f(village.index, model="iid")+f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_poverty <- run_inla_model(formula_poverty,stack_est_multi,my_spde=spde)
+
+formula_water <- y~-1+Intercept+distance_to_water+
+    f(village.index, model="iid")+f(hh.index, model="iid")+f(spatial.field, model=spde)
+model_water <- run_inla_model(formula_water,stack_est_multi,my_spde=spde)
+
+## now combine them all
+coefs_mv_uni <-
+    bind_rows(
+        bind_cols(
+            variable = rownames(model_urban$summary.fixed),
+            sapply(model_urban$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_urban$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_urban$summary.fixed))) %>%
+            filter(variable != "Intercept"),    
+        bind_cols(
+            variable = rownames(model_altitude$summary.fixed),
+            sapply(model_altitude$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_altitude$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_altitude$summary.fixed))) %>%
+            filter(variable != "Intercept"),    
+        bind_cols(
+            variable = rownames(model_water$summary.fixed),
+            sapply(model_water$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_water$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_water$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_poverty$summary.fixed),
+            sapply(model_poverty$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_poverty$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_poverty$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_travel_time$summary.fixed),
+            sapply(model_travel_time$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_travel_time$summary.fixed$`0.5quant`),
+            model = rep("univariate",
+                        nrow(model_travel_time$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_pop$summary.fixed),
+            sapply(model_pop$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_pop$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_pop$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_income$summary.fixed),
+            sapply(model_income$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_income$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_income$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_edu$summary.fixed),
+            sapply(model_edu$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_edu$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_edu$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_land$summary.fixed),
+            sapply(model_land$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_land$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_land$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_owner$summary.fixed),
+            sapply(model_owner$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_owner$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_owner$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_elec$summary.fixed),
+            sapply(model_elec$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_elec$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_elec$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_travel$summary.fixed),
+            sapply(model_travel$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_travel$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_travel$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_sex$summary.fixed),
+            sapply(model_sex$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_sex$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_sex$summary.fixed))) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(model_age$summary.fixed),
+            sapply(model_age$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(model_age$summary.fixed$`0.5quant`),
+            model = rep("univariate",nrow(model_age$summary.fixed))) %>%
+            filter(variable != "Intercept")
+    )
+
+write_csv(coefs_mv_uni,"generated_data/univariate_rf.csv")
+```
+
+Quick look at the univariate analyses:
+
+```{r univariate analysis}
+# coefs_mv_uni <- read_csv(here("generated_data/univariate_rf.csv"))
+kable(coefs_mv_uni)
+```
+
+## Multivariable regression of individual-level data
+
+First for RF predicted outcomes. Note that I played with different
+prior specifications for the random effects for village and
+household. The verison with the loggamma prior seems to have the most
+reasonable posterior precicsion for village and slightly better
+CPO/WAIC (if this is even meaningful here).
+
+```{r multivariate individual, cache=TRUE}
+formula_all <- y~-1+Intercept+age_group1 + age_group2+
+    sexMale+
+    elecTRUE+ownerHHTRUE+landTRUE+urbanTRUE+
+    incomeSumm2+incomeSumm1+incomeSumm4+
+    educationSumm3+educationSumm2+educationSumm1+
+    logpop+travel_time+poverty+
+    travel1+travel2+travel3+
+    distance_to_water+altitude+
+    f(spatial.field, model=spde)+
+    ## f(village.index, model="iid")+
+    ## f(hh.index, model="iid")
+    f(village.index, model="iid",prior="loggamma",param=c(0.1,1))+
+    f(hh.index, model="iid",prior="loggamma",param=c(0.1,1))
+
+formula_all_no_spde <- y~-1+Intercept+
+    age_group1 + age_group2+
+    sexMale+
+    elecTRUE+ownerHHTRUE+landTRUE+urbanTRUE+
+    incomeSumm2+incomeSumm1+incomeSumm4+
+    educationSumm3+educationSumm2+educationSumm1+
+    logpop+travel_time+poverty+
+    travel1+travel2+travel3+distance_to_water+altitude+
+    f(village.index, model="iid",prior="loggamma",param=c(0.1,1))+
+    f(hh.index, model="iid",prior="loggamma",param=c(0.1,1))
+
+formula_all_no_res <- y~-1+Intercept+
+    age_group1 + age_group2+
+    sexMale+
+    elecTRUE+ownerHHTRUE+landTRUE+urbanTRUE+
+    incomeSumm2+incomeSumm1+incomeSumm4+
+    educationSumm3+educationSumm2+educationSumm1+
+    logpop+travel_time+poverty+
+    travel1+travel2+travel3+distance_to_water+altitude
+
+formula_only_spde <- y~-1+Intercept+
+    age_group1 + age_group2+
+    sexMale+
+    elecTRUE+ownerHHTRUE+landTRUE+urbanTRUE+
+    incomeSumm2+incomeSumm1+incomeSumm4+
+    educationSumm3+educationSumm2+educationSumm1+
+    logpop+travel_time+poverty+
+    travel1+travel2+travel3+distance_to_water+altitude+
+    f(spatial.field, model=spde)
+
+set.seed(1)
+output_all <- inla(formula_all,
+                   data=inla.stack.data(stack_est_multi, spde=spde),
+                   family="binomial",
+                   Ntrials=1,
+                   control.inla=list(correct=TRUE,correct.factor=10),
+                   control.predictor=list(A=inla.stack.A(stack_est_multi),
+                                          compute=TRUE),
+                   control.compute=list(dic=TRUE,waic=TRUE,cpo=TRUE),
+                   control.fixed=list(expand.factor.strategy="model.matrix"))
+
+#summary(output_all)
+
+## same but without spatial effects
+output_all_no_spde <- inla(
+    formula_all_no_spde,
+    data=inla.stack.data(stack_est_multi),
+    family="binomial",
+    Ntrials=1,
+    control.inla=list(correct=TRUE,correct.factor=10),
+    control.predictor=list(A=inla.stack.A(stack_est_multi),compute=TRUE),
+    control.compute=list(dic=TRUE,waic=TRUE,cpo=TRUE),
+    control.fixed=list(expand.factor.strategy="model.matrix"))
+
+output_all_no_res <- inla(
+    formula_all_no_res,
+    data=inla.stack.data(stack_est_multi),
+    family="binomial",
+    Ntrials=1,
+    control.inla=list(correct=TRUE,correct.factor=10),
+    control.predictor=list(A=inla.stack.A(stack_est_multi),compute=TRUE),
+    control.compute=list(dic=TRUE,waic=TRUE,cpo=TRUE),
+    control.fixed=list(expand.factor.strategy="model.matrix"))
+
+output_all_only_spde <- inla(
+    formula_only_spde,
+    data=inla.stack.data(stack_est_multi,spde=spde),
+    family="binomial",
+    Ntrials=1,
+    control.inla=list(correct=TRUE,correct.factor=10),
+    control.predictor=list(A=inla.stack.A(stack_est_multi),compute=TRUE),
+    control.compute=list(dic=TRUE,waic=TRUE,cpo=TRUE),
+    control.fixed=list(expand.factor.strategy="model.matrix"))
+```
+
+```{r extract inla est}
+## Binding all risk factor coefficients
+coefs_mv <-
+    bind_rows(
+        coefs_mv_uni,
+        bind_cols(
+            variable = rownames(output_all$summary.fixed),
+            sapply(output_all$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")) ,
+            median = exp(output_all$summary.fixed$`0.5quant`),
+            model = rep("full model",22)) %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(output_all_no_spde$summary.fixed),
+            sapply(output_all_no_spde$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(output_all_no_spde$summary.fixed$`0.5quant`),
+            model = rep("no spatial \n random effects",22))  %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(output_all_only_spde$summary.fixed),
+            sapply(output_all_only_spde$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(output_all_only_spde$summary.fixed$`0.5quant`),
+            model = rep("only spatial \n random effects",22))  %>%
+            filter(variable != "Intercept"),
+        bind_cols(
+            variable = rownames(output_all_no_res$summary.fixed),
+            sapply(output_all_no_res$marginals.fixed,
+                   function(x) exp(inla.hpdmarginal(p = .95, x))) %>%
+                t %>% data.frame %>%
+                magrittr::set_colnames(c("low","high")),
+            median = exp(output_all_no_res$summary.fixed$`0.5quant`),
+            model = rep("no random effects",22))  %>%
+            filter(variable != "Intercept")) %>%
+    mutate(variable = recode_risk_factors(variable))
+
+write_csv(coefs_mv,"generated_data/covariate_ests.csv")
+```
+
+Now, let's make a plot for the supplement illustrating the effect size across models:
+
+```{r effect size figures}
+# coefs_mv <- read_csv(here("generated_data/covariate_ests.csv"))
+coefs_mv %>%
+    mutate(variable = factor(variable,levels=c(
+        "0-4 years",
+        "5-14 years",
+        ">14 years",
+        "male",
+        "no travel in last 6 months",
+        "travel last week",
+        "travel last month",
+        "travel last 6 months",
+        "<7,000TK","7,000-9,999TK","10,000-20,000TK",">20,000TK",
+        "no school (head hhl)","primary school (head hhl)","secondary school (head hhl)","post-secondary education (head hhl)",
+        "electricity in house",
+        "owns land",
+        "owns home",
+        "urban",
+        "distance to major water body (per 10km)",
+        "poverty index",
+        "travel time to nearest city (min)",
+        "altitude",
+        "population density (log)"))) %>%
+    ggplot(aes(y=median, x=variable, color=model)) +
+    geom_point(alpha=.75,size=2,position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=low,ymax=high),
+                  width=1,alpha=.5,position=position_dodge(width=0.5)) +
+    geom_hline(yintercept=1,col="grey") + 
+    coord_flip() +
+    theme_minimal() +
+    scale_y_log10("odds ratio", breaks=2^(-4:4)) +
+    xlab("") +
+    theme(legend.position = "bottom")
+
+ggsave("figures/covariate_comp_plot.pdf",width=9,height=7)
+ggsave("figures/covariate_comp_plot.png",width=9,height=7)
+```
+
+Now we will make Table 1 for the manuscript:
+```{r effect table, eval=F}
+## make a nicer table for publication
+ft <- tibble(variable = c(
+    "0-4 years",
+    "5-14 years",
+    ">14 years",
+    "male",
+    "no travel in last 6 months",
+    "travel last week",
+    "travel last month",
+    "travel last 6 months",
+    "<7,000TK","7,000-9,999TK","10,000-20,000TK",">20,000TK",
+    "no school (head hhl)","primary school (head hhl)","secondary school (head hhl)","post-secondary education (head hhl)",
+    "electricity in house",
+    "owns land",
+    "owns home",
+    "urban",
+    "distance to major water body (per 10km)",
+    "poverty index",
+    "travel time to nearest city (min)",
+    "altitude",
+    "population density (log)"),
+    n = c(
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$age_group==1),
+                mean(dat_no_na_riskfactors$age_group==1)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$age_group==2),
+                mean(dat_no_na_riskfactors$age_group==2)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$age_group==3),
+                mean(dat_no_na_riskfactors$age_group==3)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$sex=="Male"),
+                mean(dat_no_na_riskfactors$sex=="Male")),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$travel==4),
+                mean(dat_no_na_riskfactors$travel==4)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$travel==1),
+                mean(dat_no_na_riskfactors$travel==1)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$travel==2),
+                mean(dat_no_na_riskfactors$travel==2)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$travel==3),
+                mean(dat_no_na_riskfactors$travel==3)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$incomeSumm == 1),
+                mean(dat_no_na_riskfactors$incomeSumm==1)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$incomeSumm == 2),
+                mean(dat_no_na_riskfactors$incomeSumm==2)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$incomeSumm == 3),
+                mean(dat_no_na_riskfactors$incomeSumm==3)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$incomeSumm == 4),
+                mean(dat_no_na_riskfactors$incomeSumm==4)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$educationSumm == 4),
+                mean(dat_no_na_riskfactors$educationSumm==4)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$educationSumm == 3),
+                mean(dat_no_na_riskfactors$educationSumm==3)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$educationSumm == 2),
+                mean(dat_no_na_riskfactors$educationSumm==2)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$educationSumm == 1),
+                mean(dat_no_na_riskfactors$educationSumm==1)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$elec==TRUE),
+                mean(dat_no_na_riskfactors$elec==TRUE)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$land==TRUE),
+                mean(dat_no_na_riskfactors$land==TRUE)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$ownerHH==TRUE),
+                mean(dat_no_na_riskfactors$ownerHH==TRUE)),
+        sprintf("%.0f (%.2f)",sum(dat_no_na_riskfactors$urban==TRUE),
+                mean(dat_no_na_riskfactors$urban==TRUE)),
+        sprintf("%.2f (%.2f)",mean(dat_no_na_riskfactors$distance_to_water),
+                sd(dat_no_na_riskfactors$distance_to_water)),
+        sprintf("%.2f (%.2f)",mean(dat_no_na_riskfactors$poverty),
+                sd(dat_no_na_riskfactors$poverty)),               
+        sprintf("%.2f (%.2f)",mean(dat_no_na_riskfactors$travel_time),
+                sd(dat_no_na_riskfactors$travel_time)),  
+        sprintf("%.2f (%.2f)",mean(dat_no_na_riskfactors$altitude),
+                sd(dat_no_na_riskfactors$altitude)),  
+        sprintf("%.2f (%.2f)",mean(dat_no_na_riskfactors$logpop),
+                sd(dat_no_na_riskfactors$logpop)))) %>% 
+    left_join(coefs_mv %>% 
+                  filter(model %in% c("full model","univariate")) %>% 
+                  mutate(est = sprintf("%.2f (%.2f-%.2f)",
+                                       median,low,high)) %>% 
+                  select(-low:-median) %>%
+                  spread(model,est), by="variable") %>% 
+    mutate(`full model` = ifelse(is.na(`full model`),"-",`full model`),
+           univariate = ifelse(is.na(univariate),"-",univariate)) %>% 
+    flextable() %>%
+    autofit
+
+read_docx() %>% 
+    body_add_flextable(value = ft) %>% 
+    print(target = "tables/table1.docx")
+```
+
+## Model comparison
+
+Let's quickly look at the DIC for each model:
+
+```{r dic}
+data.frame(model=c("full","no spatial","only spatial","no random effects"),
+           dic=c(output_all$dic$dic,
+                 output_all_no_spde$dic$dic,
+                 output_all_only_spde$dic$dic,
+                 output_all_no_res$dic$dic),
+           waic=c(output_all$waic$waic,
+                  output_all_no_spde$waic$waic,
+                  output_all_only_spde$waic$waic,
+                  output_all_no_res$waic$waic)) %>% kable
+```
+
+## Variance decomposition
+
+```{r var decomp}
+## spatial model
+rf <- inla.spde.result(inla = output_all,name="spatial.field",
+                       spde=spde,do.trans=TRUE)
+
+med_spde_var <- inla.emarginal(function(x) x,
+                               rf$marginals.variance.nominal[[1]])
+vil_var <- inla.emarginal(function(x) 1/x,
+                          output_all$marginals.hyperpar$`Precision for village.index`)
+hhl_var <- inla.emarginal(function(x) 1/x,
+                          output_all$marginals.hyperpar$`Precision for hh.index`)
+binom_var <- (pi ^ 2) / 3 
+
+hhl_var / (vil_var + hhl_var + binom_var + med_spde_var)
+vil_var / (vil_var + hhl_var + binom_var + med_spde_var)
+med_spde_var / (vil_var + hhl_var + binom_var + med_spde_var) 
+```
+
+Leave-one-out predictions:
+
+```{r loocv}
+adj_rf_ests <- readRDS("generated_data/results-rf-365-youden.rds")$cell_adjusted_incidence %>% 
+    group_by(community_cell, obs) %>%
+    summarize(adjusted_incidence=mean(adjusted_reps))
+dat_no_na <- serosurvey_dat %>% 
+    left_join(adj_rf_ests) %>%
+    group_by(community_cell) %>%
+    summarise(n_tested = n(),
+              adjusted_incidence = adjusted_incidence[1],
+              n_pos_rf_cor = floor(adjusted_incidence[1] * n()),
+              original_incidence = mean(pred_365),
+              n_pos_rf = sum(pred_365),
+              logpop = logpop[1],
+              poverty = poverty[1],
+              travel_time = travel_time[1],
+              distance_to_water = distance_to_water[1],
+              altitude = altitude[1],
+              grid_easting = grid_easting[1],
+              grid_northing = grid_northing[1],
+              hhids = paste(hhid,collapse=";"))
+
+## observation/prediction matrix
+A_est_multi <- inla.spde.make.A(mesh=mesh,
+                                loc=dat_no_na %>%
+                                    select(grid_easting,grid_northing) %>%
+                                    as.matrix)
+
+## leave one grid-id out of the fitting and predict on it
+## save just the mean quantiles for each
+## will do with covariates
+rc = NULL
+for(gc in dat_no_na$community_cell){
+    cat(".")
+    
+    tmp_dat = dat_no_na %>%
+        mutate(n_pos_rf_cor = ifelse(community_cell == gc,NA,n_pos_rf_cor))
+    
+    tmp_mod_matrix = model.matrix(~logpop+distance_to_water,
+                                  tmp_dat)[,-1]
+    
+    tmp_est_stack = inla.stack(
+        data=list(y=tmp_dat[,'n_pos_rf_cor'] %>% unlist,
+                  n=dat_no_na[,'n_tested'] %>% unlist), ## response
+        A=list(A_est_multi,1), ## projector matrix
+        effects=list(s_index,
+                     data.frame(Intercept=rep(1,nrow(tmp_dat)),tmp_mod_matrix)),
+        tag="tmp")
+    
+    all_covs_f <- y ~ -1 + Intercept + logpop + distance_to_water + f(spatial.field, model = spde)
+    
+    test =inla(all_covs_f,
+               data=inla.stack.data(tmp_est_stack),
+               family="binomial",
+               verbose=FALSE,
+               control.predictor=list(
+                   A=inla.stack.A(tmp_est_stack),link=1,
+                   compute=TRUE),
+               control.compute=list(dic=FALSE,config=TRUE),
+               Ntrials=tmp_dat$n_tested)
+    
+    summary_hold_out = test$summary.fitted.values[which(is.na(tmp_dat$n_pos_rf_cor)), c("mean", "sd","0.025quant","0.5quant","0.975quant")]
+    summary_others = test$summary.fitted.values[which(!is.na(tmp_dat$n_pos_rf_cor)), c("mean", "sd","0.025quant","0.5quant","0.975quant")]
+    
+    rc = rbind(rc,
+               data.frame(left_out_cell = gc,
+                          summary_hold_out,
+                          mean_others_mean = mean(summary_others$mean),
+                          mean_others_median = mean(summary_others$`0.5quant`),
+                          median_others_mean = median(summary_others$mean),
+                          truth=dat_no_na %>% filter(community_cell==gc) %>% select(adjusted_incidence) %>% unlist))
+}
+
+## mean absolute error 
+
+model_mae <- (rc$mean - rc$truth) %>% abs %>% mean 
+
+naive_mae <- (rc$mean_others_mean - rc$truth) %>% abs %>% mean
+
+## relative MAE
+model_mae/naive_mae
+
+obs_mae <- abs(rc$mean-rc$truth)
+naive_obs_mae <-abs(rc$mean_others_mean-rc$truth)
+sum(obs_mae<naive_obs_mae)
+
+## bias 
+model_bias <- (rc$mean - rc$truth) %>% mean
+
+saveRDS(rc, "generated_data/loocv-results.rds")
+```
+
+
+From this we see that we do an OK job at predicting with a pearsons
+correlation of `r cor(rc$mean,rc$truth)` ,  a mean
+absolute error of `r (rc$mean - rc$truth) %>% abs %>% mean` and a bias
+of `r (rc$mean - rc$truth) %>% mean`.
+
+```{r session}
+sessionInfo()
+```

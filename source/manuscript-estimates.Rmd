@@ -1,0 +1,271 @@
+---
+title: "Primary Estimates from _Vibrio Cholerae O1 Transmission in Bangladesh: Insights from a Nationally-Representative Serosurvey_"
+author: "Andrew Azman and Stephen Lauer"
+date: "8-January-2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(echo=F, message=F, warning=F, eval=T, fig.align='center',fig.pos='ht')
+```
+
+```{r load}
+library(pacman)
+p_load(here,broom,ggsn,ggpubr,ggnewscale)
+source("source/utils.R")
+reload_source()
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+## load in original data with random forest predictions
+rf_data <- readRDS("generated_data/serosurvey-with-rf-preds.rds") %>% 
+    mutate(div_name=gsub(" Division","",Division_name),
+           vib_320=vibinab>=320 | vibogaw>=320) %>% 
+    group_by(hhid) %>% 
+    mutate(hh_inf_other=sum(pred_365, na.rm=T)-pred_365>0)
+
+## load 365-day random forest results 
+results_365 <- readRDS("generated_data/results-rf-365-youden.rds")
+analysis_data <- readRDS("generated_data/serosurvey-with-rf-preds.rds")
+
+## load INLA nationwide seroincidence results
+inla_est <- readRDS("generated_data/INLA-seroincidence-est.rds")
+
+## read in map data
+bgd0 <- load_bgd_shp(0) %>% transform_to_btm()
+bgd2 <- load_bgd_shp(2) %>% transform_to_btm()
+
+bgd1 <- load_bgd_shp(1) %>%
+    mutate(adm1name=NAME_1) %>% 
+    mutate(NAME_1=ordered(NAME_1,
+                          levels=c("Rangpur", "Rajshahi",
+                                   "Dhaka", "Sylhet",
+                                   "Khulna", "Barisal",
+                                   "Chittagong")))
+
+## load in INLA grid cell estimates
+map_dat <- readRDS("generated_data/grid-cell-data.rds")
+
+sampling_locs <- readRDS("data/community-data.rds") %>% 
+    filter(!is.na(CommLat)) %>%
+    select(CommLong,CommLat) %>% 
+    st_as_sf(coords=c("CommLong","CommLat"),
+             crs="+proj=longlat +datum=WGS84 +no_defs") %>% 
+    distinct() %>% 
+    mutate(var=1)
+```
+
+## Results: overall estimates
+
+```{r overall}
+print("Proportion of sample with vibriocidal titers greater than or equal to 320")
+mean(rf_data$vib_320, na.rm=T)
+
+print("In-sample posterior median seroincidence rate, with 95% CI (from Stan)")
+quantile(results_365$seroincidence_dat$p_survey, probs=c(0.5, .025, .975))
+
+print("Nationwide median seroincidence rate estimate, with 95% CI (from INLA)")
+quantile(inla_est$est_rate, probs=c(0.5, .025, .975))
+```
+
+## Results: household and community
+
+```{r hh}
+print("Minimum and maximum proportion of household members infected")
+hh_dat <- rf_data %>% 
+    group_by(hhid) %>% 
+    summarize(obs=n(),
+              n_pos=sum(pred_365, na.rm=T),
+              sero_pct=n_pos/obs)
+quantile(hh_dat$sero_pct, probs=c(0,1))
+
+print("Proportion of households with no members infected")
+mean(hh_dat$sero_pct==0)
+sum(hh_dat$sero_pct==0)
+
+print("Increase in risk due having at least one other seropositive household member.")
+print("Mean and 95% CI from GLM")
+hh_inf_glm <- glm(pred_365~hh_inf_other, data=rf_data,
+                  family=binomial(link="log"))
+summary(hh_inf_glm)
+print("Mean increase:")
+exp(hh_inf_glm$coefficients[2])
+confint(hh_inf_glm)
+exp(confint(hh_inf_glm)[2,])
+
+print("Number of communities with incidence under 5% (from Stan adjusted in-sample)")
+results_365$loc_adjusted_incidence %>% 
+    filter(rep_ind==1, adjusted_incidence<.05) %>% 
+    nrow()
+
+print("Number of communities with incidence over 50% (from Stan adjusted in-sample)")
+results_365$loc_adjusted_incidence %>% 
+    filter(rep_ind==1, adjusted_incidence>.5) %>% 
+    nrow()
+```
+
+## Results: LOOCV
+
+```{r loocv}
+loocv_dat <- readRDS("generated_data/loocv-results.rds")
+
+print("LOOCV bias")
+mean(loocv_dat$mean) - mean(loocv_dat$truth)
+
+print("LOOCV MAE")
+mean(abs(loocv_dat$mean-loocv_dat$truth))
+```
+
+```{r inla rr and total}
+print("Median estimate of total infections, with 95% CI (from INLA), millions")
+quantile(inla_est$est_total/1e6, probs=c(0.5, .025, .975))
+
+print("Dhaka seroincidence rate")
+weighted.mean(map_dat$inc_median[map_dat$NAME_2=="Dhaka"], map_dat$pop[map_dat$NAME_2=="Dhaka"])
+sum(map_dat$implied_inf[map_dat$NAME_2=="Dhaka"]/1e6)
+```
+
+```{r fig1, cache=T}
+## find the adjusted incidence by location
+loc_inc_plot <- results_365$loc_adjusted_incidence %>%
+    group_by(community_id, obs, original_incidence) %>%
+    summarise(inc_median=median(adjusted_incidence),
+              inc_mean=mean(adjusted_reps),
+              inc_lb=quantile(adjusted_reps, probs=.025),
+              inc_ub=quantile(adjusted_reps, probs=.975)) %>% 
+    ungroup() %>% 
+    left_join(analysis_data %>%
+                  select(community_id, Division_name) %>%
+                  distinct()) %>% 
+    mutate(div_name=gsub(" Division","",Division_name),
+           div_name=ordered(div_name,
+                            levels=c("Rangpur", "Rajshahi",
+                                     "Dhaka", "Sylhet",
+                                     "Khulna", "Barisal",
+                                     "Chittagong"))) %>% 
+    group_by(div_name) %>% 
+    arrange(inc_median, inc_ub, original_incidence) %>% 
+    mutate(div_rank=row_number(inc_median))
+
+dat_community_sum <- analysis_data %>%
+    group_by(community_id) %>%
+    summarize(easting=lon[1],
+              northing=lat[1]) %>%
+    left_join(loc_inc_plot) %>%
+    left_join(analysis_data)
+
+loc_plot <- ggplot(loc_inc_plot, aes(y=div_rank)) +
+    geom_errorbarh(aes(xmin=inc_lb, xmax=inc_ub),
+                   color="gray50", height=0.2) +
+    geom_point(aes(x=inc_median, color=div_name), size=2) +
+    # geom_point(aes(x=original_incidence), color="red", shape=17) +
+    facet_grid(div_name~., scales="free_y", space="free_y", switch="y") +
+    scale_y_discrete("") +
+    scale_x_continuous("Seroincidence",
+                       breaks=seq(0,1,.25),
+                       limits=c(0,1)) +
+    scale_color_manual("",
+                       values=cbbPalette[-1],
+                       guide=FALSE) +
+    theme_bw() +
+    theme(axis.text.x=element_text(color="black"),
+          axis.text.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          strip.text.y=element_text(angle=180),
+          strip.background.y=element_blank())
+
+inc_map <- ggplot() +
+    geom_sf(data=bgd1,
+            aes(fill=as.factor(NAME_1), color=as.factor(NAME_1)),
+            alpha=0.5) +
+    scale_fill_manual(values=cbbPalette[-1],
+                      guide=FALSE) +
+    scale_color_manual(values=cbbPalette[-1],
+                       guide=FALSE) +
+    new_scale("color") +
+    geom_point(data=dat_community_sum,
+               aes(x=easting,y=northing,color=inc_median),
+               pch=17,size=2, inherit.aes=F) +
+    scale_color_gradient("Seroincidence",
+                         low="white",high="black",
+                         breaks=seq(0,1,.25),
+                         limits=c(0,1)) +
+    theme_void() +
+    coord_sf(datum = NA) +
+    theme(legend.position=c(.7,.85),
+          legend.direction="horizontal",
+          legend.key.width=unit(0.75, "cm")) +
+    guides(color=guide_colorbar(title.position="top",title.hjust=0.5))
+
+g <- ggarrange(inc_map,loc_plot, ncol=2, labels = c("A", "B"))
+
+ggsave("figures/fig1_raw.pdf",g,height=6,width=10)
+ggsave("figures/fig1_raw.png",g,height=6,width=10)
+```
+
+```{r fig2, cache=T}
+covs_rr_cor_plot <-
+    ggplot() +
+    geom_sf(data = map_dat,
+            aes(fill = rr_med_bound), color=NA,lwd = 0) +
+    geom_sf(data = bgd0, fill = NA, lwd = 0.5) +
+    geom_sf(data = sampling_locs, aes(shape=as.factor(var)),
+            size = 1.2,
+            show.legend="point") +
+    scale_fill_distiller("Relative\nInfection\nRisk",
+                         palette="Spectral",
+                         limits=c(-2, 2),
+                         breaks=-2:2,
+                         labels=c(" 0.25", " 0.5", " 1", " 2", " 4")) + 
+    scale_shape_manual("", labels="Sampled\nCommunity", values=6,
+                       guide=guide_legend(override.aes=list(color="black",
+                                                            alpha=1))) +
+    coord_sf(datum = NA)  +
+    ggsn::scalebar(bgd0, dist = 100, dist_unit = "km",
+                   transform=FALSE,location = "bottomleft",
+                   border.size = .3,
+                   box.color = alpha("black",.6),
+                   box.fill = c(alpha("black",.6), "white")) + 
+    labs(x = "") +
+    labs(y = "") +
+    theme_void() +
+    theme(legend.spacing.y=unit(0.5, "cm"))
+
+covs_infections_plot <-
+    ggplot() +
+    geom_sf(data = map_dat,
+            aes(fill = implied_inf), color=NA,lwd = 0) +
+    geom_sf(data = bgd0, fill = NA, lwd = 0.5) +
+    geom_sf(data=bgd2 %>%
+                filter(NAME_2 %in% c("Dhaka", "Chittagong", "Khulna",
+                                     "Sylhet", "Rajshahi")),
+            color=alpha("black",0.1),fill=NA) +  
+    geom_sf_text(data=bgd2 %>%
+                     filter(NAME_2 %in% c("Dhaka", "Chittagong", "Khulna",
+                                          "Sylhet", "Rajshahi")),
+                 aes(label=NAME_2),color=alpha("black",0.5),nudge_y=10000) +  
+    scale_fill_distiller("Implied\ninfections",
+                         trans="log",
+                         palette="Spectral",
+                         breaks=10^(1:5),
+                         labels=c("10","100","1000","10000","100000")) + 
+    coord_sf(datum = NA)  +
+    ggsn::scalebar(bgd0, dist = 100, dist_unit = "km",
+                   transform=FALSE,location = "bottomleft",
+                   border.size = .3,
+                   box.color = alpha("black",.6),
+                   box.fill = c(alpha("black",.6), "white")) + 
+    labs(x = "") +
+    labs(y = "") +
+    theme_void()
+
+g2 <- ggarrange(covs_rr_cor_plot,covs_infections_plot,ncol=2,
+               labels = c("A", "B"))
+ggsave("figures/fig2_raw.pdf",g2,height=6,width=10)
+ggsave("figures/fig2_raw.png",g2,height=6,width=10)
+```
+
+
+```{r session}
+sessionInfo()
+```

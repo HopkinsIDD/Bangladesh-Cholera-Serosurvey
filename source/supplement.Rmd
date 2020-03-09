@@ -1,0 +1,912 @@
+---
+title: "*Vibrio Cholerae* O1 Transmission in Bangladesh: Insights from a Nationally-Representative Serosurvey Supplement"
+author:
+  - name: Andrew S Azman
+    affiliation: a
+    footnote: 1
+  - name: Stephen A Lauer
+    affiliation: a
+    footnote: 1
+  - name: M. Taufiq Rahman Bhuiyan
+    affiliation: b
+  - name: Francisco J Luquero
+    affiliation: c,d
+  - name: Daniel T Leung
+    affiliation: e
+  - name: Sonia Hegde
+    affiliation: a
+  - name: Jason Harris
+    affiliation: f,g,h
+  - name: Kishor Kumar Paul
+    affiliation: b
+  - name: Fatema Khaton
+    affiliation: b
+  - name: Jannatul Ferdous
+    affiliation: b
+  - name: Justin Lessler
+    affiliation: a
+  - name: Henrik Salje
+    affiliation: i,a
+    footnote: 2
+  - name: Firdausi Qadri
+    affiliation: b
+    footnote: 2
+  - name: Emily S Gurley
+    affiliation: a,b
+    footnote: 2
+address:
+  - code: a
+    address: Department of Epidemiology, Johns Hopkins Bloomberg School of Public Health, Baltimore, USA
+  - code: b
+    address: icddr,b, Dhaka, Bangladesh
+  - code: c
+    address: Epicentre, Paris, France
+  - code: d
+    address: Department of International Health, Johns Hopkins Bloomberg School of Public Health, Baltimore, USA
+  - code: e
+    address: Division of Infectious Diseases, University of Utah School of Medicine, Salt Lake City, USA
+  - code: f
+    address: Division of Infectious Diseases, Massachusetts General Hospital, Boston, USA
+  - code: g
+    address: Division of Global Health, Massachusetts General Hospital, Boston, USA
+  - code: h
+    address: Department of Pediatrics, Harvard School of Medicine, Boston, USA
+  - code: i
+    address: Mathematical Modelling of Infectious Diseases Unit, Institut Pasteur, Paris, France
+footnote:
+  - code: 1
+    text: Co-first authors
+  - code: 2
+    text: Co-last authors
+journal: "The Lancet Infectious Diseases"
+date: "`r Sys.Date()`"
+header-includes:
+    \usepackage[letterpaper, margin=1in]{geometry}
+    \usepackage[OT1]{fontenc}
+    \usepackage{amsthm,amsmath,amsfonts}
+    \usepackage{graphicx}
+    \usepackage{float}
+    \usepackage{array}
+    \usepackage{multirow}
+    \renewcommand{\thepage}{S\arabic{page}}
+    \renewcommand{\thesection}{S\arabic{section}}
+    \renewcommand{\thetable}{S\arabic{table}}
+    \renewcommand{\thefigure}{S\arabic{figure}}
+csl: elsevier-vancouver.csl
+bibliography: supplement.bib
+biblio-style: elsevier-vancouver
+output:
+    bookdown::pdf_book:
+        base_format: rticles::elsevier_article
+        fig_caption: yes
+        toc: yes
+        toc_depth: 3
+    keep_tex: true    
+---
+
+```{r opts, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+knitr::opts_chunk$set(echo=F, message=F, warning=F, eval=T, fig.align='center',fig.pos='ht')
+```
+
+```{r library, include=FALSE}
+library(pacman)
+p_load(here,broom,ggsn,ggpubr,ggnewscale, kableExtra)
+source("source/utils.R")
+reload_source()
+set.seed(1)
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+p_load(captioner)
+tables <- captioner(prefix = "Table S", auto_space = FALSE)
+figures <- captioner(prefix = "Figure S", auto_space = FALSE)
+```
+
+```{r load, include=FALSE}
+## load results data
+results_100 <- readRDS("generated_data/results-rf-100-youden.rds")
+results_200 <- readRDS("generated_data/results-rf-200-youden.rds")
+results_365 <- readRDS("generated_data/results-rf-365-youden.rds")
+vib_100 <- readRDS("generated_data/results-vib-100.rds")
+vib_200 <- readRDS("generated_data/results-vib-200.rds")
+vib_365 <- readRDS("generated_data/results-vib-365.rds")
+
+## load estimates for sensitivity from the smoothed logit model
+sensitivity_est <- results_365$sens_tv
+sensitivity_est_200 <- results_200$sens_tv
+
+## load analysis data
+analysis_data <- readRDS("generated_data/serosurvey-with-rf-preds.rds") %>% 
+    mutate(div_name=gsub(" Division", "", Division_name))
+
+## load cohort data with RF preds
+cohort_data <- find_recent_file("cohort-w-rf-preds-365-youden",
+                                here("generated_data/")) %>%
+    read_csv()
+
+## load RF model
+rf_model <- readRDS("generated_data/forest_no_ogrp_365.rds")
+
+## maps of BGD
+bgd0 <- load_bgd_shp(level=0) %>%
+    transform_to_btm()
+bgd2 <- load_bgd_shp(level=2) %>%
+    transform_to_btm()
+
+sampling_locs <- readRDS("data/community-data.rds") %>% 
+    filter(!is.na(CommLat)) %>%
+    select(CommLong,CommLat) %>% 
+    st_as_sf(coords=c("CommLong","CommLat"),
+             crs="+proj=longlat +datum=WGS84 +no_defs") %>% 
+    distinct() %>% 
+    mutate(var=1)
+
+## load in gridded map of covariates
+my_grid <- readRDS("data/grid_with_covs.rds")
+```
+
+```{r make-map-data, cache=T}
+registerDoMC(detectCores()-2)
+
+## remove all grid cells not within the boundaries of BGD
+## (i.e. in India or the ocean)
+bgd_grid <- my_grid %>% 
+    st_intersection(bgd2)
+
+## read in all of the map data and combine them
+file_list <- list.files(path="generated_data/boot-maps/",
+                        pattern="boot_map_*")
+
+all_boots <- foreach(i=seq(length(file_list)),.combine=rbind) %dopar%{
+    readRDS(paste0("generated_data/boot-maps/",file_list[i])) %>%
+        filter(grid_id %in% bgd_grid$grid_id) %>% 
+        mutate(rep=i)
+}
+
+## recalculate the sample_rr for all cells
+all_boots_rr <- all_boots %>%
+    left_join(my_grid %>% 
+                  as_tibble() %>% 
+                  select(grid_id, pop) %>% 
+                  distinct()) %>% 
+    group_by(rep) %>% 
+    mutate(sample_rr=sample_rate/weighted.mean(sample_rate, pop))
+
+cells_lt_25 <- formatC(100*mean(all_boots_rr$sample_rr < .25), digits=1, format="f")
+cells_gt_4 <- formatC(100*mean(all_boots_rr$sample_rr > 4), digits=1, format="f")
+
+## summarize each grid cell by a bunch of metrics
+map_dat <- all_boots_rr %>% 
+    group_by(grid_id, pop) %>%
+    summarise(rr_median=median(sample_rr),
+              rr_gt2=mean(sample_rr>2),
+              rr_lthalf=mean(sample_rr<0.5),
+              rr_lb=quantile(sample_rr, probs=.025),
+              rr_ub=quantile(sample_rr, probs=.975),
+              inc_mean=mean(sample_rate),
+              inc_median=median(sample_rate),
+              inc_lb=quantile(sample_rate, probs=.025),
+              inc_ub=quantile(sample_rate, probs=.975)) %>%
+    mutate(rr_med_bound=ifelse(abs(log2(rr_median))>2,
+                               2*log2(rr_median)/abs(log2(rr_median)),
+                               log2(rr_median)),
+           rr_lb_bound=ifelse(abs(log2(rr_lb))>2,
+                              2*log2(rr_lb)/abs(log2(rr_lb)),
+                              log2(rr_lb)),
+           rr_ub_bound=ifelse(abs(log2(rr_ub))>2,
+                              2*log2(rr_ub)/abs(log2(rr_ub)),
+                              log2(rr_ub)),
+           rr_int_log_diff=rr_ub_bound-rr_lb_bound,
+           inc_interval_width=inc_ub-inc_lb,
+           implied_inf=inc_median*pop) %>% 
+    left_join(my_grid) %>% 
+    st_as_sf() %>% 
+    st_intersection(bgd2)
+
+saveRDS(map_dat, "generated_data/grid-cell-data.rds")
+
+## get the nationwide estimates from the INLA model
+rep_sum <- all_boots_rr %>% 
+    group_by(rep) %>% 
+    summarise(est_rate=weighted.mean(sample_rate, pop),
+              est_total=sum(sample_total)) %>% 
+    ungroup()
+
+saveRDS(rep_sum, "generated_data/INLA-seroincidence-est.rds")
+
+rm(all_boots)
+rm(all_boots_rr)
+```
+
+```{r fill-in vals}
+## from the model find the original sensitivity and specificity
+original_sens <- mean(cohort_data$rf_preds[cohort_data$inf_365==1])
+original_spec <- mean(!cohort_data$rf_preds[cohort_data$inf_365==0])
+
+## original proportion classified as seroincident
+unadj_est <- formatC(100*results_365$original_incidence, digits=1, format="f")
+unadj_lb <- formatC(100*quantile(results_365$unadjusted_reps, probs=.025), digits=1, format="f")
+unadj_ub <- formatC(100*quantile(results_365$unadjusted_reps, probs=.975), digits=1, format="f")
+
+## adjusting the unadjusted estimates by the original sensitivity
+## and specificity
+adj_pred_bad <- formatC(100*correct_sero_misclass_p(
+    results_365$original_incidence,
+    mean(cohort_data$rf_preds[cohort_data$inf_365==1]),
+    mean(!cohort_data$rf_preds[cohort_data$inf_365==0])),
+    digits=1, format="f")
+
+adj_pred_bad_lb <- formatC(100*correct_sero_misclass_p(
+    results_365$unadjusted_reps,
+    mean(cohort_data$rf_preds[cohort_data$inf_365==1]),
+    mean(!cohort_data$rf_preds[cohort_data$inf_365==0])) %>%
+        quantile(probs=.025),
+    digits=1, format="f")
+
+adj_pred_bad_ub <- formatC(100*correct_sero_misclass_p(
+    results_365$unadjusted_reps,
+    mean(cohort_data$rf_preds[cohort_data$inf_365==1]),
+    mean(!cohort_data$rf_preds[cohort_data$inf_365==0])) %>%
+        quantile(probs=.975),
+    digits=1, format="f")
+
+## adjusted sensitivity estimates
+adj_sensitivity <- results_365$adjusted_sensitivity
+adj_sens <- formatC(100*median(adj_sensitivity), digits=1, format="f")
+adj_sens_lb <- formatC(100*quantile(adj_sensitivity, probs=.025), digits=1, format="f")
+adj_sens_ub <- formatC(100*quantile(adj_sensitivity, probs=0.975), digits=1, format="f")
+
+## 95% interval for specificity
+spec_est <- formatC(100*median(results_365$specificity), digits=1, format="f")
+spec_lb <- formatC(100*quantile(results_365$specificity, probs=.025), digits=1, format="f")
+spec_ub <- formatC(100*quantile(results_365$specificity, probs=.975), digits=1, format="f")
+
+## the survey estimates (from Stan model)
+survey_est <- formatC(100*median(results_365$seroincidence_dat$p_survey), digits=1, format="f")
+survey_lb <- formatC(100*quantile(results_365$seroincidence_dat$p_survey, probs=.025), digits=1, format="f")
+survey_ub <- formatC(100*quantile(results_365$seroincidence_dat$p_survey, probs=.975), digits=1, format="f")
+
+## the overall estimates (from Stan model)
+overall_est <- formatC(100*results_365$adjusted_incidence, digits=1, format="f")
+overall_lb <- formatC(100*quantile(results_365$adjusted_reps, probs=.025), digits=1, format="f")
+overall_ub <- formatC(100*quantile(results_365$adjusted_reps, probs=.975), digits=1, format="f")
+
+## spatial estimates (INLA model)
+spatial_est <- formatC(100*median(rep_sum$est_rate), digits=1, format="f")
+spatial_lb <- formatC(100*quantile(rep_sum$est_rate, probs=.025), digits=1, format="f")
+spatial_ub <- formatC(100*quantile(rep_sum$est_rate, probs=.975), digits=1, format="f")
+
+## spatial total seroincidence estimates
+seroinc_est <- formatC(median(rep_sum$est_total)/1e6, digits=1, format="f", big.mark=",")
+seroinc_lb <- formatC(quantile(rep_sum$est_total, probs=.025)/1e6, digits=1, format="f", big.mark=",")
+seroinc_ub <- formatC(quantile(rep_sum$est_total, probs=.975)/1e6, digits=1, format="f", big.mark=",")
+
+## the vibriocidal model seroincidence rate estimates
+vib_class <- formatC(100*mean(analysis_data$vib_320, na.rm=T), digits=1, format="f")
+vib_est <- formatC(100*vib_365$adjusted_incidence, digits=1, format="f")
+vib_lb <- formatC(100*quantile(vib_365$adjusted_reps, probs=.025), digits=1, format="f")
+vib_ub <- formatC(100*quantile(vib_365$adjusted_reps, probs=.975), digits=1, format="f")
+
+## 200-day estimates
+est_200 <- formatC(100*results_200$adjusted_incidence, digits=1, format="f")
+lb_200 <- formatC(100*quantile(results_200$adjusted_reps, probs=.025), digits=1, format="f")
+ub_200 <- formatC(100*quantile(results_200$adjusted_reps, probs=.975), digits=1, format="f")
+
+## 100-day estimates
+est_100 <- formatC(100*results_100$adjusted_incidence, digits=1, format="f")
+lb_100 <- formatC(100*quantile(results_100$adjusted_reps, probs=.025), digits=1, format="f")
+ub_100 <- formatC(100*quantile(results_100$adjusted_reps, probs=.975), digits=1, format="f")
+
+## 200-day vibriocidal estimates
+est_200 <- formatC(100*vib_200$adjusted_incidence, digits=1, format="f")
+lb_200 <- formatC(100*quantile(vib_200$adjusted_reps, probs=.025), digits=1, format="f")
+ub_200 <- formatC(100*quantile(vib_200$adjusted_reps, probs=.975), digits=1, format="f")
+
+## 100-day vibriocidal estimates
+est_100 <- formatC(100*vib_100$adjusted_incidence, digits=1, format="f")
+lb_100 <- formatC(100*quantile(vib_100$adjusted_reps, probs=.025), digits=1, format="f")
+ub_100 <- formatC(100*quantile(vib_100$adjusted_reps, probs=.975), digits=1, format="f")
+
+## number of white grid cells
+cell_prop_wide <- formatC(100*mean(map_dat$rr_int_log_diff==4), digits=1, format="f")
+cell_prop_narrow <- formatC(100*mean(map_dat$rr_int_log_diff==0), digits=1, format="f")
+```
+
+# Cholera seroincidence model and inference
+
+The primary goal of these analyses is to estimate the proportion of the population infected by *Vibrio cholerae* O1 in the previous year, which we refer to as the `seroincidence rate' and denote as $\pi$.
+We use a previously validated random forest model to classify whether each member of a recent nationally-representative serosurvey was infected in the year before the before the survey.
+We treat the binary outcome of this model like a diagnostic test, which when summarized at the population-level can be adjusted for sensitivity and specificity.
+As detailed in the paper, the serosurvey was a two-stage cluster survey, with 70 communities selected with probability proportional to each community's population and at least 10 households (with at least 40 total samples) sampled from each community.
+
+We make three estimates of the seroincidence rate, all of which rely on a Bayesian hierarchical model that is specified below.
+For the 'survey estimate', we assume that the nationwide estimate of seroincidence is equivalent to the in-sample estimate of seroincidence, since the serosurvey sample was nationally representative.
+For the 'overall estimate', we extrapolate the survey estimate to both the unsampled populations within the sampled communities as well as to the 97,092 unsampled communities throughout Bangladesh.
+For the 'spatial estimate', we extend the survey estimate to the rest of the country using a logistic regression model including covariates and a Matern spatial covariance function.
+
+## Bayesian hierarchical model
+
+We model the number of predicted seropositive people in each serosurvey household, $z_h$, with a Bayesian hierarchical model similar to that of Makela, Si, and Gelman,[@makela_bayesian_2018] augmented to account for the sensitivity and specificity of the random forest model and with a binomial outcome in place of a Bernoulli outcome:
+\begin{align}
+    z_h &\sim \text{Binomial}(n_h, \pi_h \theta_{1 \mid 1} + (1-\pi_h)(1-\theta_{0 \mid 0})) \label{eqn:one} \\
+    \pi_h &= \text{logit}^{-1}(\alpha_{c[h]}) \\
+    \alpha_{c} &\sim \text{Normal}(\alpha_0 + \gamma \log(N_c), \sigma^2) \\
+    \alpha_0, \gamma &\sim \text{Normal}(0, 1) \\
+    \sigma &\sim \text{Normal}^{+}(0,1).
+\end{align}
+The number of predicted seropositive people in a household, $z_h$, is determined by the number of members sampled in the household $n_h$ and the probability of a household member testing positive.
+We separate the probability of testing positive into two parts: the true positive rate, calculated as the household seroincidence rate $\pi_h$ multiplied by the sensitivity $\theta_{1 \mid 1}$; and the false positive rate, calculated as the seronegative rate ($1-\pi_h$) multiplied by one minus the specificity ($1-\theta_{0 \mid 0}$).
+Each household in community $c$ is assumed to have the same underlying community-level rate $\alpha_c$.
+The community-level rate is logit normal with its mean determined by the sum of a country-level intercept, $\alpha_0$, and linear term to account for the (log) population of each community ($N_c$ with coefficient $\gamma$) and a variance $\sigma^2$.
+Since the probability that a community was sampled was proportional to its population, we need to account for any relationship between community population and seroincidence rate to control for confounding.
+As in Makela, Si, and Gelman, we use a standard normal as a prior on $\alpha_0$ and $\gamma$ and a standard normal truncated to be positive as a prior for $\sigma$.
+
+Upon estimating $\pi_h$, we can make predictions for the number of seroincident individuals in each sampled household, $\hat{y}_{h}$:
+\begin{align}
+    \hat{y}_h &= \text{Binomial}(n_h, \pi_h) \\
+    \hat{y}_{survey} &= \sum_{h=1}^H \hat{y}_h \\
+    \pi_{survey,c} &= \frac{\sum_{h \in c} \hat{y}_h}{\sum_{h \in c} n_h} \\
+    \pi_{survey} &= \frac{\hat{y}_{survey}}{\sum_{h=1}^H n_h}. \label{eqn:survey}
+\end{align}
+The number of seroincident individuals within a surveyed household is a binomial draw from that household with probability $\pi_h$.
+These draws can be averaged across each community to calculate the community-specific survey estimates $\pi_{survey,c}$ or across all households to calculate the nationwide survey estimate $\pi_{survey}$.
+
+We can also make predictions for the number of seroincident individuals in unsampled households within sampled communities $\hat{y}_{unobs}$ and the number of seroincident individuals in unsampled communities $\hat{y}_{unsamp}$ to calculate the overall seroincidence rate $\pi_{overall}$:
+\begin{align}
+    \hat{y}_{unobs} &= \sum_{c=1}^{C_{obs}} \text{Binomial} \left (N_c - \sum_{h \in c} n_h, \text{logit}^{-1}(\alpha_c) \right) \\
+    \hat{y}_{unsamp} &= \sum_{c=C_{obs}+1}^C \text{Binomial} \left (N_c, \text{logit}^{-1}(\alpha_{unsamp,c}) \right ) \\
+    \alpha_{unsamp,c} &= \text{Normal} \left (\alpha_0 + \gamma \log(N_c), \sigma^2 \right ) \\
+    \pi_{overall} &= \frac{(\hat{y}_{survey} + \hat{y}_{unobs} + \hat{y}_{unsamp})}{\sum_{c=1}^{C} N_c} \label{eqn:overall}.
+\end{align}
+We separate sampled and unsampled communities by using the first $C_{obs}$ indices of $c$ to represent sampled communities, while indices $C_{obs}+1, ..., C$ represent unsampled communities.
+For unobserved households within sampled communities, we assume that the seroincidence rate is the same as that amongst the sampled households, $\text{logit}^{-1}(\alpha_c)$.
+For unobserved communities, we draw a new seroincidence rate $\text{logit}^{-1}(\alpha_{unsamp,c})$, where $\alpha_{unsamp,c}$ is a draw from a normal distribution with a mean determined by a function of the country-level intercept $\alpha_0$ and the population of that community $N_c$ and a variance of $\sigma^2$.
+The sum of these estimates divided by the entire population is the overall estimate of the nationwide seroincidence, $\pi_{overall}$.
+
+To fit the Bayesian hierarchical model and make both the survey and overall seroincidence estimates we used a model built using the Stan probabilistic programming language.[@carpenter_stan:_2017; @RStan]
+
+## Integrated nested Laplace approximations and the spatial estimate
+
+Our primary estimate of the country-wide seroincidence used in the main analyses is however the spatial estimate.
+To produce this estimate, we extend the community-specific survey estimates to the entire country using a logistic regression model with a Matern spatial covariance function and covariates with integrated nested Laplace approximations (INLA),[@rue_approximate_2009] as described in the main text.
+Specificially, we fit an INLA model to each of 1,000 posterior draws of community seroincidence from the Bayesian hierarchical model (described above) and then predict the seroincidence for all 5km by 5km grid-cells across the country.
+In the end, we generate 1,000 maps of cholera seroincidence rates and we take a population-weighted average to produce the nationwide spatial estimates.
+Our primary results are the median spatial estimate and the 95% credible interval.
+
+## Random forest predictions
+
+Azman *et al.* fitted a random forest model using age, sex, vibriocidal titers (Ogawa and Inaba), anti-LPS IgG and IgA antibodies, and anti-CTB IgG and IgA antibodies, and blood group to classify the seropositive status of individuals from a longitudinal cohort study in Bangladesh.[@azman_estimating_2019]
+Since no blood group information was collected in the serosurvey, we fit a new random forest model to the cohort data using all of the remaining covariates.
+For each observation in the cohort study, we use the proportion of trees that predict that the observation is seropositive as the probability of seropositivity.
+From these probabilities, we calculate the receiver operating characteristic (ROC) curve for the cohort predictions and calculate the cutoff that maximizes the Youden's J statistic, *i.e.* the sum of the sensitivity and the specificity.[@youden_index_1950]
+
+We use the random forest model to predict the seropositivity status of each participant in the serosurvey; the participants whose probability of seropositivity exceed the Youden cutoff are classified as seropositive.
+The serosurvey predictions are aggregated to the household unit, providing us with $z_h$ in Equation \@ref(eqn:one).
+
+## Specificity and sensitivity of the random forest predictions
+
+As with all imperfect tests, population-level (*e.g.*, aggregated) random forest model seroincidence estimates can be corrected for the test's specificity and sensitivity, when known.
+To estimate the specificity and sensitivity of this random forest model we conducted leave-one-individual-out cross validation (LOOCV) on the original cohort data used in Azman *et al.*, where the seropositive status of the participants was known.
+For each individual in the cohort, we fit a random forest model to the rest of the cohort, calculate the Youden cutoff, and predict the seropositivity of the left-out individual, which we call LOOCV predictions and denote $z^{\ell}$.
+
+To estimate the specificity, $\theta_{0 \mid 0}$ in Equation \@ref(eqn:one), we include the LOOCV predictions in our Bayesian hierarchical model:
+\begin{align}
+    z^{\ell}_i \mid y_i=0 &\sim Bernoulli(1-\theta_{0 \mid 0}).
+\end{align}
+The LOOCV predictions of the seronegative observations from the cohort study (*i.e.* $y_i=0$) are Bernoulli random variables with the probability of seropositivity equal to $(1-\theta_{0 \mid 0})$.
+
+The sensitivity of the random forest predictions, $\theta_{1 \mid 1}$ in Equation \@ref(eqn:one), varies across days since infection due to the decay in antibody response over time.
+After infection with *V. cholerae* O1, most antibodies rise including vibriocidals, one of the most informative markers, which peak around 7-10 days post-infection.
+As time since infection increases, the antibody profile of an individual, in general, returns to pre-infection levels.
+The vibriocidal titers decay quickly in the first three months before decaying more slowly over the following three years.
+This decay is illustrated by the decline in raw sensitivity of the random forest predictions over time (Table \@ref(tab:sensitivity-table)).
+
+```{r sensitivity-table, fig.pos='H'}
+sens_tbl <- cohort_data %>%
+    filter(inf_365==1, lbday2>5) %>%
+    group_by(lbday) %>%
+    summarise(obs=n(),
+              sensitivity=mean(rf_preds),
+              min_day=min(lbday2),
+              max_day=max(lbday2)) %>%
+    ungroup() %>%
+    transmute(`Days since infection`=ifelse(min_day==max_day, min_day,
+                                            paste0(min_day,"-",max_day)),
+              Observations=obs,
+              Sensitivity=paste0(formatC(100*sensitivity,digits=1, format="f"),"%"))
+
+kable(sens_tbl, booktabs=T,
+      align="ccc",
+      caption="The sensitivity of the random forest predictions of seropositivity over days since infection.",
+      linesep="") %>% 
+    kable_styling(latex_options="hold_position")
+```
+
+To account for this decay, we estimate the sensitivity as a time-varying quantity rather than as a static quantity and rewrite the overall sensitivity as a joint probability:
+\begin{align}
+    \underbrace{\theta_{1|1}}_{\substack{\text{overall} \\ \text{sensitivity}}} &= \underbrace{\mathbb{P}(Z=1 \mid Y=1,T)}_{\text{time-varying sensitivity}} \underbrace{\mathbb{P}(T \mid Y=1)}_{\substack{\text{daily probability} \\ \text{of infection}}},
+\end{align}
+where $Z$ is the result of the test (*i.e.* the random forest model), $Y$ is the true seropositive status of the individual, and $T$ is the time since infection in days.
+We need to estimate the time-varying sensitivity ($\mathbb{P}(Z=1 \mid Y=1,T)$) and the probability of being infected $T=t$ days ago ($\mathbb{P}(T \mid Y=1)$).
+Since sensitivity only concerns seropositive individuals (*i.e.* $Y=1$) and seropositivity is by our definition infection over the past 365 days, $T$ is restricted to be less than or equal to 365 days for all components of $\theta_{1|1}$.
+
+### Time-varying sensitivity
+
+We estimate the time-varying sensitivity of the random forest predictions in the cohort study using a logistic regression model with a cubic polynomial for the log of days since infection, similar to the method used by Leisenring *et al.*:[@leisenring_marginal_1997]
+\begin{align}
+    \text{logit}(Z^{ell} \mid Y=1,T=t) = \beta_0 + \beta_1 \log(t) + \beta_2 \log(t)^2 + \beta_3 \log(t)^3.
+\end{align}
+
+We assume that the sensitivity of the test depends only on the time since infection, $T$.
+The posterior median and 95% credible interval for the sensitivity at each time since infection (from 7 to 365), $\mathbb{P}(Z=1 \mid Y=1,T=7,\dots,365)$, is shown Figure \@ref(fig:sensitivity-curve).
+
+```{r sensitivity-curve, fig.pos='H', fig.cap="The estimated sensitivity of the random forest model for identifying whether an individual was infected in the last year by the number of days since true infection. The points represent the median estimate from a generalized logistic regression model for sensitivity with cubic polynomial terms for the log of days since infection. The gray error bars represent the 95\\% credible intervals."}
+sensitivity_plot_dat <- sensitivity_est %>%
+    as_tibble() %>%
+    gather("days", "sensitivity") %>%
+    mutate(days_since_infection=substr(days,2,4) %>% as.numeric) %>%
+    group_by(days_since_infection) %>%
+    summarise(sens_median=median(sensitivity),
+              sens_lb=quantile(sensitivity,probs=.025),
+              sens_ub=quantile(sensitivity,probs=.975)) %>% 
+    filter(days_since_infection>=7)
+
+ggplot(sensitivity_plot_dat, aes(x=days_since_infection)) +
+    geom_errorbar(aes(ymin=sens_lb, ymax=sens_ub), color="gray30") +
+    geom_point(aes(y=sens_median)) +
+    scale_x_continuous("Days since infection",
+                       breaks=c(0,90,180,270,360)) +
+    scale_y_continuous("Median estimated sensitivity,\nwith 95% credible interval",
+                       limits=c(0,1)) +
+    theme_minimal() +
+    theme(axis.text=element_text(color="black"))
+ggsave(here("figures","sup_time_var_sens.png"),height=7,width=7)
+```
+
+### Daily probability of infection
+
+The estimates of time-varying sensitivity allow us to calculate the overall sensitivity given the time since infection, however we do not know this time for any individual in the serosurvey.
+We assume that individuals only get infected once in the past year, such that the daily probabilities sum to one across $t=1,\dots,365$.
+We assume that the risk of infection for each individual was uniformly distributed over the year before sample collection:
+
+\begin{align*}
+    \mathbb{P}(T=1 \mid Y=1) = \mathbb{P}(T=2 \mid Y=1) = \dots = \mathbb{P}(T=365 \mid Y=1) = \frac{1}{365}.
+\end{align*}\
+We set the expected value of any given time since infection to be equal to $\frac{1}{365}$, however the Bayesian hierarchical model allows for variability around each estimate.
+
+Past work on clinical cholera has shown that there is seasonal variation of cholera in Bangladesh, which varies regionally across the country.[@das_geographical_2014]
+While we do not expect that incorporating seasonality will greatly affect our overall estimates of seroincidence, if more detailed estimates of seasonality were available across the country, they could be used to refine estimates of these or future analyses. 
+
+## Other estimators and time frames
+
+We fit several alternative models and observe the differences in their seroincidence estimates.
+We use an 'unadjusted' model, where our random forest estimates are not adjusted by sensitivity and specificity; *i.e.* $\pi_h \theta_{1 \mid 1} + (1-\pi_h)(1-\theta_{0 \mid 0})$ in Equation \ref{eqn:one} is replaced by $p_h$.
+Previous work showed that a vibriocidal titer (either Inaba and Ogawa) of at least 320 was the best threshold for maximimizing sensitivity and specificity for identifying individuals infected in the previous year; thus we fit a 'vibriocidal' model which used these predictions in place of the random forest predictions for $z_h$ in Equation \ref{eqn:one}.
+To see how the seroincidence changed over multiple time frames, we also fit the random forest and vibriocidal models to 100 and 200 days since infection.
+We use the equivalent of the overall estimate to conduct these additional analyses.
+
+## Risk factors for seroposivity
+
+We used a series of logistic regression models with a Matern spatial covariance function to explore the association between seropositivity (random forest positive for individuals) and various individual-, household- and community-level covariates. We explored both univariate relationship and multivariate (linear) relationships between the covariates and the binary seropositivity outcome using models with and without different random effects and spatial correlation. The 'full' model, used for the primary analyses in manuscript, included a Matern spatial random field and random effects for both households and communities (assumed to be independent and identically distributed with log-gamma priors). We also estimated the relationship between the covariates and seropositivity with a model including no random effects for household or community and only spatial correlation, and another model including only random effects for household and community without spatial correlation.
+
+## Results
+
+The three methods produced similar estimates for the nationwide seroincidence rate for the 365-day period preceding the serosurvey (Figure \@ref(fig:all-est)).
+The median spatial estimate from the INLA 5km by 5km grid-cell maps was `r spatial_est`% (95% CI: `r spatial_lb`-`r spatial_ub`%)
+This corresponds to a median of `r seroinc_est` million (95% CI: `r seroinc_lb`-`r seroinc_ub` million) individuals infected during that time period.
+The median overall estimate from the Bayesian hierarchical model, $\pi_{overall}$ in Equation \ref{eqn:overall}, was `r overall_est`% (95% CI: `r overall_lb`-`r overall_ub`%).
+The median in-sample estimate from the same model, $\pi_{survey}$ in Equation \ref{eqn:survey}, was `r survey_est`% (95% CI: `r survey_lb`-`r survey_ub`%). 
+
+Coincidentally, the unadjusted 365-day random forest model estimates are similar to those of the estimates adjusted for sensitivity and specificity, albeit with a narrower credible interval (median: `r unadj_est`%, 95% CI: `r unadj_lb`-`r unadj_ub`%).
+By comparison, the vibriocidal model yields lower seroincidence rate estimates (median: `r vib_est`%, 95% CI: `r vib_lb`-`r vib_ub`%) than the models based on random forest estimates despite the fact that the proportion of the serosurvey that had vibriocidal titers greater than or equal to 320 is similar to the proportion that was classified as seropositive by the random forest model (`r vib_class`% vs. `r unadj_est`%).
+This is due to the vibriocidal estimates having a lower specificity than the random forest models (Figure \@ref(fig:window-comp)).
+
+## Mapping
+
+From the grid-cell estimates, we can make a series of maps to observe the geographic variability of cholera throughout Bangladesh.
+Maps of the median seroincidence rate and estimated number of annual infections by grid cell are in the main manuscript (Figure 2).
+To help identify high-risk regions and our confidence in the estimates, we calculated proportion of posterior grid-cell seroincidence estimates with a relative risk greater than two (Figure \@ref(fig:high-risk-areas)).
+As in the manuscript, we see higher risk in the Bay of Bengal and in pockets in the northwest and north, though less so in the northeast.
+
+Figure \@ref(fig:rr-var-map) investigates the variance of our estimates
+As variance scales with the size of the estimate, it is difficult to interpret.
+The coefficient of variation, the standard deviation is divided by the mean, is another measure often used but it can become very large for places where mean estimates are very small.
+Instead, we use the width of the logged relative risk credible interval in this map.
+To do this, we first bound all posterior samples of the relative risk to be between 0.25 and 4 (or $-2$ and 2 on the log2 scale), which represent reasonable cutoffs for very high and very low risk as only `r cells_gt_4`% of samples across all grid cells are greater than 4 and `r cells_lt_25`% are less than 0.25.
+Next, we take the log2 difference between the upper and lower bounds of the 95% credible interval for each grid cell.
+Grid cells with a log2 difference of 4 have an upper bound relative risk that is greater than 4 and a lower bound relative risk less than 0.25, indicating that we are very uncertain of the true risk in that grid cell; `r cell_prop_wide`% of the grid cells in our map have a log2 difference of 4 and are displayed in white.
+Grid cells with a log2 difference of 0 have both upper and lower bounds either above 4 or below 0.25 and would be indicated on the map with maximum opacity if there were any.
+The colors on the map indicate the posterior median for that grid cell and the opacity indicates the log2 difference between the upper and lower bounds.
+This map demonstrates how the certainty in our estimates fades with distance from the sampled communities.
+
+```{r all-est, fig.pos='H', fig.cap="The estimated seroincidence rate distributions by estimator for the whole population (A) and by community (B). The unadjusted random forest estimates (orange) do not account for sensitivity or specificity. The adjusted survey estimates (light blue) are the in-sample estimates from the Bayesian hierarchical model which accounts for the sensitivity and specificity of the random forest estimates. The adjusted overall estimates (green) are from the same model but including predictions for unsampled communities. The adjusted spatial estimates (dark blue) extend the survey estimates to the rest of the country using a logistic regression with a Matern spatial covariance function. Only the unadjusted random forest and adjusted survey estimators make community-specific estimates in (B)."}
+all_est <- tibble(type="a",
+                  estimate=results_365$original_incidence,
+                  reps=results_365$unadjusted_reps) %>% 
+    bind_rows(
+        tibble(type="b",
+               estimate=median(results_365$seroincidence_dat$p_survey),
+               reps=results_365$seroincidence_dat$p_survey)
+    ) %>% 
+    bind_rows(
+        tibble(type="c",
+               estimate=results_365$adjusted_incidence,
+               reps=results_365$adjusted_reps)
+    ) %>% 
+    bind_rows(
+        tibble(type="d",
+               estimate=median(rep_sum$est_rate),
+               reps=rep_sum$est_rate)
+    )
+
+est_plot <- ggplot(data=all_est, aes(x=type)) +
+    geom_violin(aes(y=reps, fill=type)) +
+    geom_point(aes(y=estimate)) +
+    scale_x_discrete("",
+                     labels=c("Unadjusted\nrandom forest",
+                              "Adjusted survey",
+                              "Adjusted overall",
+                              "Adjusted spatial")) +
+    scale_y_continuous("Estimated seroincidence, by estimator",
+                       limits=c(0,.5),
+                       breaks=seq(0,1,.1)) +
+    scale_fill_manual(values=cbbPalette[c(2:4,6)]) +
+    theme_minimal() +
+    theme(axis.text.y=element_text(color="black"),
+          axis.text.x=element_text(color="black", angle=45, vjust=1, hjust=1),
+          legend.position="none")
+
+all_est_loc <- results_365$loc_adjusted_incidence %>% 
+    select(community_id, a=original_incidence, b=adjusted_incidence) %>% 
+    distinct() %>% 
+    gather("type", "estimate", -community_id) %>% 
+    left_join(analysis_data %>% select(community_id, div_name)
+              %>% distinct()) %>% 
+    group_by(community_id) %>% 
+    mutate(adj_est=estimate[type=="b"],
+           original_est=estimate[type=="a"]) %>% 
+    group_by(div_name) %>% 
+    arrange(adj_est, original_est) %>% 
+    mutate(div_rank=dense_rank(adj_est))
+
+all_loc_plot <- ggplot(all_est_loc, aes(y=div_rank)) +
+    geom_point(aes(x=estimate, color=type), size=2, alpha=0.5) +
+    facet_grid(div_name~., scales="free_y", space="free_y", switch="y") +
+    scale_y_discrete("") +
+    scale_x_continuous("Seroincidence rate, by estimator",
+                       breaks=seq(0,1,.25),
+                       limits=c(0,1)) +
+    scale_color_manual("",
+                       values=cbbPalette[c(2:4,6)],
+                       guide=FALSE) +
+    theme_minimal() +
+    theme(axis.text.x=element_text(color="black"),
+          axis.text.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          strip.text.y=element_text(angle=180),
+          strip.background.y=element_blank())
+
+grid.arrange(est_plot+ggtitle("A"), all_loc_plot+ggtitle("B"), nrow=1, ncol=2)
+```
+
+```{r window-comp, fig.pos='H', fig.cap="The estimated seroincidence rate across varying infection window sizes and estimators. We estimate the seroincidence rate with two different estimators across three window sizes (100, 200, and 365 days). The random forest uses age, sex, and measurements of six antibodies (vibriocidal Inaba, vibriocidal Ogawa, anti-CTB IgG, anti-CTB IgA, anti-LPS IgG and anti-LPS IgA) to classify individuals as seroincident. As a comparison, we use the historical convention where those with either vibriocidal titers greater than or equal to 320 is classified as seroincident. The vibriocidal titer method has lower specificity, which yields lower estimates of seropositivity than those from the random forest model. The estimate of the median seroincidence rate with each estimator is displayed above its distribution. The estimates of the adjusted sensitivity and specificity for each estimator and window size are presented in the table below the figure.", eval=T}
+window_dat <- bind_rows(
+    tibble(window_size="[1,100]",
+           diagnostic="'Random forest'",
+           adjusted_est=results_100$adjusted_incidence,
+           adjusted_reps=results_100$adjusted_reps),
+    tibble(window_size="[1,200]",
+           diagnostic="'Random forest'",
+           adjusted_est=results_200$adjusted_incidence,
+           adjusted_reps=results_200$adjusted_reps),
+    tibble(window_size="[1,365]",
+           diagnostic="'Random forest'",
+           adjusted_est=results_365$adjusted_incidence,
+           adjusted_reps=results_365$adjusted_reps),
+    tibble(window_size="[1,100]",
+           diagnostic="'Vibriocidal' >= 320",
+           adjusted_est=vib_100$adjusted_incidence,
+           adjusted_reps=vib_100$adjusted_reps),
+    tibble(window_size="[1,200]",
+           diagnostic="'Vibriocidal' >= 320",
+           adjusted_est=vib_200$adjusted_incidence,
+           adjusted_reps=vib_200$adjusted_reps),
+    tibble(window_size="[1,365]",
+           diagnostic="'Vibriocidal' >= 320",
+           adjusted_est=vib_365$adjusted_incidence,
+           adjusted_reps=vib_365$adjusted_reps)
+)
+
+window_fig <-
+    ggplot(data=window_dat, aes(x=window_size)) +
+    geom_violin(aes(y=adjusted_reps, fill=window_size), scale="width") +
+    geom_point(aes(y=adjusted_est)) +
+    geom_text(aes(y=0.4, label=paste(formatC(100*adjusted_est, digits=1, format="f"),"%"))) +
+    facet_grid(.~diagnostic, labeller=label_parsed) +
+    scale_x_discrete("Days since infection") +
+    scale_y_continuous("Estimated seroincidence rate",
+                       limits=c(0,.5)) +
+    scale_fill_manual(values=cbbPalette[-1],
+                      guide=F) +
+    theme_minimal() +
+    theme(axis.text=element_text(color="black"))
+
+window_tbl_dat <- bind_rows(
+    tibble(type="RF\n[1,100]",
+           sensitivity=median(results_100$adjusted_sensitivity),
+           specificity=median(results_100$specificity)),
+    tibble(type="RF\n[1,200]",
+           sensitivity=median(results_200$adjusted_sensitivity),
+           specificity=median(results_200$specificity)),
+    tibble(type="RF\n[1,365]",
+           sensitivity=median(results_365$adjusted_sensitivity),
+           specificity=median(results_365$specificity)),
+    tibble(type="Vib320\n[1,100]",
+           sensitivity=median(vib_100$adjusted_sensitivity),
+           specificity=median(vib_100$specificity)),
+    tibble(type="Vib320\n[1,200]",
+           sensitivity=median(vib_200$adjusted_sensitivity),
+           specificity=median(vib_200$specificity)),
+    tibble(type="Vib320\n[1,365]",
+           sensitivity=median(vib_365$adjusted_sensitivity),
+           specificity=median(vib_365$specificity))) %>%
+    mutate(sensitivity=paste0(formatC(sensitivity*100, digits=1, format="f"),"%"),
+           specificity=paste0(formatC(specificity*100, digits=1, format="f"),"%")) %>% 
+    t()
+colnames(window_tbl_dat) <- window_tbl_dat[1,]
+window_tbl <- ggtexttable(window_tbl_dat[-1,],
+                          theme=ttheme("classic", padding=unit(c(8,8), "mm")))
+ggarrange(window_fig, window_tbl, nrow=2)
+ggsave(here("figures","sup_window_est.png"),height=7,width=7)
+```
+
+```{r high-risk-areas, cache=T, fig.pos='H', fig.cap="Proportion of posterior samples with relative risk greater than 2 for each 5km x 5km grid cell."}
+ggplot() +
+    geom_sf(data = map_dat,
+            aes(fill = rr_gt2), color=NA,lwd = 0) +
+    geom_sf(data = bgd0, fill = NA, lwd = 0.5) +
+    geom_sf(data = sampling_locs, color = 'black', pch=3,size = 1.2) +
+    scale_fill_gradient("Proportion of samples\nwith relative risk >2",
+                        high="red", low="white",
+                        limits=c(0,1), breaks=seq(0,1,.25)) + 
+    coord_sf(datum = NA)  +
+    labs(x = "") +
+    labs(y = "") +
+    theme_void() +
+    theme(legend.position="bottom")
+ggsave(here("figures","sup_rr_gt_2.png"),height=7,width=7)
+```
+
+```{r rr-var-map, cache=T, fig.pos='H', fig.cap="The median relative risk estimate for each 5km x 5km grid cell with the opacity determined by the width of the 95\\% credible interval. White grid cells have 95\\% credible intervals where the lower bound is less than 0.25 and the upper bound is greater than 4. Places with narrower credible intervals have greater opacity. The most opaque cells are those where both the upper and lower bound are either less than 0.25 or above 4."}
+ggplot() +
+    geom_sf(data = map_dat,
+            aes(fill=rr_med_bound,alpha = (4-rr_int_log_diff)/4), color=NA,lwd = 0) +
+    geom_sf(data = bgd0, fill = NA, lwd = 0.5) +
+    geom_sf(data = sampling_locs, color = 'black', pch=3,size = 1.2) +
+    scale_fill_distiller("RR median",
+                         palette="Spectral",
+                         limits=c(-2, 2),
+                         breaks=seq(-2, 2, 1),
+                         labels=c("< 0.25", "0.5", "1", "2", "> 4")) + 
+    scale_alpha_continuous("Confidence\nlevel",range=c(0,1), limits=c(0,1),
+                           breaks=c(0,0.25,0.5,0.75,1),
+                           labels=c("Least","","Moderate","","Most"),
+                           guide="none") + 
+    coord_sf(datum = NA)  +
+    labs(x = "") +
+    labs(y = "") +
+    theme_void() 
+```
+
+## Leave-one-out cross validation
+
+```{r loocv, fig.pos='H', fig.cap="The results from leave-one-out cross validation. Results from cross-validation where each grid cell was held out of the INLA model, one at a time, and the posterior predictive mean for that location was estimated ($y$-axis). The blue dashed line illustrates the best fitting linear model prediction. The solid orange line is the best fitting linear model prediction from a naive model that predicts the average of the mean of the other sampled grid cells."}
+loocv_dat <- readRDS("generated_data/loocv-results.rds")
+
+ggplot(loocv_dat,aes(x=truth)) + 
+    geom_abline(intercept = 0, slope = 1,col='grey70') + xlim(0,.9) + ylim(0,.9) +
+    #  geom_point(aes(y=X0.5quant),col='orange') +
+    geom_point(aes(y=mean),col='steelblue') +
+    geom_smooth(aes(y=mean),method="lm",col='steelblue',lty=2,se=F)+ 
+    geom_smooth(aes(y=mean_others_mean),method="lm",col='orange')+
+    
+    xlab("Seroincidence rate") +
+    ylab("Predicted seroincidence rate") +
+    theme_bw()
+```
+
+## Risk Factors for seroposivity
+
+```{r risk-factors,fig.pos='H', fig.height=6, fig.cap="Estimates of odds ratios for seropositivity from different models."}
+coefs_mv <- read_csv("generated_data/covariate_ests.csv") %>% 
+    mutate(variable=ifelse(variable=="distance to major water body (per 10km)", "distance to\nwater (per 10km)", variable),
+           variable=ifelse(variable=="post-secondary education (head hhl)","post-secondary\neducation (head hhl)", variable))
+coefs_mv %>%
+    mutate(variable = factor(variable,levels=c(
+        "0-4 years",
+        "5-14 years",
+        ">14 years",
+        "male",
+        "no travel in last 6 months",
+        "travel last week",
+        "travel last month",
+        "travel last 6 months",
+        "<7,000TK","7,000-9,999TK","10,000-20,000TK",">20,000TK",
+        "no school (head hhl)","primary school (head hhl)","secondary school (head hhl)","post-secondary\neducation (head hhl)",
+        "electricity in house",
+        "owns land",
+        "owns home",
+        "urban",
+        "distance to\nwater (per 10km)",
+        "poverty index",
+        "travel time to nearest city (min)",
+        "altitude",
+        "population density (log)"))) %>%
+    ggplot(aes(y=median, x=variable, color=model)) +
+    geom_point(alpha=.75,size=2,position=position_dodge(width=0.5)) +
+    geom_errorbar(aes(ymin=low,ymax=high),
+                  width=1,alpha=.5,
+                  position=position_dodge(width=0.5)) +
+    geom_hline(yintercept=1,col="grey") + 
+    coord_flip() +
+    theme_minimal() +
+    scale_y_log10("odds ratio", breaks=2^(-4:4)) +
+    scale_color_manual("",
+                       values=cbbPalette[c(2:4,6,7)],
+                       labels=c("full\nmodel",
+                                "no\nrandom\neffects",
+                                "no\nspatial\nrandom\neffects",
+                                "only\nspatial\nrandom\neffects",
+                                "univariate")) +
+    xlab("") +
+    theme(legend.position = "bottom")
+
+ggsave(here("figures","risk-factors.png"),height=5,width=8)
+```
+
+# Additional descriptive analyses
+
+In this section we present additional descriptive analyses to illustrate the distributions of each of the antibody levels in different ways and characteristics of the cohort.
+
+```{r pop-pyramid, fig.pos='H', fig.height=4, fig.cap="Population pyramid of survey participants. Dots illustrate the expected proportion of each age-sex category according to the 2012 Bangladesh census."}
+make_age_pyramid(analysis_data) + 
+    annotate("text",x=c(17,17),y=c(-4,4),label=c("Female","Male")) +
+    theme(axis.text=element_text(color="black"))
+ggsave(here("figures","sup_age_pyramid.png"),height=5,width=5)
+```
+
+```{r ELISA-titer-distributions, fig.pos='H', fig.height=6, fig.cap="Distributions (smoothed) of antibodies measured by ELISA. Smoothed densities estimated using ggplot with default parameters (geom\\_density) with locations of data points shown in the rug plot below."}
+analysis_data %>%
+    select(lps_iga_inaba,lps_iga_ogawa,lps_igg_inaba,
+           lps_igg_ogawa,ctb_iga,ctb_igg) %>%
+    gather(test,value) %>%
+    ggplot() +
+    geom_density(aes(x=value,fill=test),col=NA) +
+    facet_wrap(.~test,scales="free_x",
+               labeller=as_labeller(assay_names_labels)) +
+    geom_rug(aes(x=value,color=test),alpha=.1,sides = "b") +
+    guides(fill=FALSE,color=FALSE) +
+    xlab("titer") +
+    theme_minimal() +
+    theme(axis.text=element_text(color="black"))
+ggsave(here("figures","sup_distributions_elisa.png"),height=5,width=8)
+```
+
+```{r vib-titer-distributions, fig.pos='H', fig.height=4, fig.cap="Distributions (smoothed) of vibriocidal antibodies. Smoothed densities estimated using ggplot with default parameters (geom\\_density) with locations of data points shown in the rug plot below."}
+analysis_data %>%
+    select(vibinab,vibogaw) %>%
+    gather(test,value) %>%
+    ggplot(aes(x=value,color=test,fill=test)) +
+    geom_density(col=NA) +
+    scale_x_continuous(trans="log2") +
+    geom_rug(alpha=.1,sides = "b") +
+    facet_wrap(.~test,labeller=as_labeller(assay_names_labels)) + 
+    xlab("vibriocidal titer") +
+    guides(fill=FALSE,color=FALSE) +
+    theme_minimal() +
+    theme(axis.text=element_text(color="black"))
+ggsave(here("figures","sup_distributions_vibriocidals.png"),height=3,width=7)
+```
+
+```{r titer-by-age, fig.pos='H', fig.cap="Distributions of ELISA antibody titers by age. Dots represent individual datapoints and lines represent the fit of a generalized additive model using a cubic spline."}
+analysis_data %>%
+    select(lps_iga_inaba,lps_iga_ogawa,lps_igg_inaba,
+           lps_igg_ogawa,ctb_iga,ctb_igg,age) %>%
+    gather(test,value,-age) %>%
+    ggplot(aes(x=age,y=value,color=test)) +
+    geom_point(alpha=.01) + geom_smooth() + scale_y_log10() +
+    facet_wrap(.~test,scales="free",
+               labeller=as_labeller(assay_names_labels)) +
+    xlab("age") + ylab("titer") +
+    guides(fill=FALSE,color=FALSE) +
+    theme_minimal() +
+    theme(axis.text=element_text(color="black"))
+ggsave(here("figures","sup_titers_by_age_elisa.png"),width=8,height=5)
+```
+
+```{r vib-titer-by-age, fig.pos='H', fig.cap="Distributions of vibriocidal antibody titers by age. Dots represent individual datapoints and lines represent the fit of a generalized additive model using a cubic spline."}
+analysis_data %>%
+    select(vibinab,vibogaw,age) %>%
+    gather(test,value,-age) %>%
+    ggplot(aes(x=age,y=value,color=test)) + geom_point(alpha=.04) +
+    geom_smooth() + scale_y_continuous(trans="log2") +
+    facet_wrap(.~test,labeller=as_labeller(assay_names_labels)) +
+    ylab("titer") +
+    guides(fill=FALSE,color=FALSE) +
+    theme_minimal() +
+    theme(axis.text=element_text(color="black"))
+ggsave(here("figures","sup_titers_by_age_vibriocidals.png"),height=3,width=6)
+```
+
+```{r all-biomarker-gam-map, cache=T, fig.pos='H', fig.width=15, fig.height=15, out.width="7.5in", out.height="7.5in", fig.cap="Smoothed maps of the antibody levels for each biomarker based on generalized additive models (GAMs) including a thinplate spline for geographic coordinates and age. Predictions are made for individuals of age 25 to reflect that of adults."}
+## making GAMS for each titer of interest
+grid_cents<- my_grid %>%
+    group_by(grid_id) %>%
+    st_centroid() %>%
+    st_coordinates %>%
+    data.frame %>%
+    mutate(n = 100)
+
+## for plotting where
+x = analysis_data$grid_easting
+y = analysis_data$grid_northing
+
+dat_map <- analysis_data %>%
+    select(vibogaw,vibinab,
+           lps_iga_inaba,
+           lps_iga_ogawa,
+           lps_igg_inaba,
+           lps_igg_ogawa,
+           ctb_igg,ctb_iga,lps_iga,lps_igg,
+           grid_easting, grid_northing,
+           age) %>%
+    gather(assay,value,-grid_easting,-grid_northing,-age)
+
+predict_and_grid <- function(d,my_grid,grid_cents,bgd=bgd2){
+    preds = predict(d,list(x = grid_cents$X,
+                           y = grid_cents$Y,
+                           age=rep(25,length(grid_cents$Y))),
+                    type="response")
+    my_grid$preds <- preds
+    my_grid <- my_grid[bgd,] ## trim to country polygon. This is the longest step
+    return(my_grid)
+}
+
+my_gams <- dat_map %>%
+    group_by(assay) %>%
+    nest %>%
+    mutate(gam_stp = map(data,
+                         ~ gam(value ~ s(x,y) + s(age),
+                               data=.,method="GCV.Cp"))) %>%
+    mutate(pred_grid_stp = map(gam_stp, 
+                               ~predict_and_grid(.,my_grid,
+                                                 grid_cents,bgd2)))
+
+## quick plot function
+plot_fun <- function(df, assay){
+    pred_min <- min(df$preds, na.rm=T) %>% round
+    pred_max <- max(df$preds, na.rm=T) %>% round
+    pred_med <- median(df$preds, na.rm=T) %>% round
+    assay_lab <- as_labeller(assay_names_labels)
+    ggplot() +
+        geom_sf(data = df, aes(fill = preds), color = NA,lwd = 0) +
+        geom_sf(data = sampling_locs, color = 'grey',
+                pch = 3,size = 1.2) +
+        scale_fill_viridis_c(assay_lab(assay), trans="log",
+                             limits=c(pred_min, pred_max),
+                             breaks=c(pred_min, pred_med, pred_max)) +
+        coord_sf(datum = NA)  +
+        labs(x = "") +
+        labs(y = "") +
+        theme_void()
+}
+
+## make plots and store in tbl
+my_gams_plots<- my_gams %>%
+    mutate(plot_stp = pmap(list(pred_grid_stp, assay), plot_fun))
+
+pdf(here("figures","gams_all.pdf"),width=15,height=15)
+png(here("figures","gams_all.png"),width=1000,height=1000)
+do.call("grid.arrange", list(grobs = my_gams_plots$plot_stp,ncol=3))
+```
+
+# References
