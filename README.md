@@ -173,4 +173,4 @@ figures/, tables/ created by the reports
 
 ## Contact
 
-Questions: Andrew Azman (azman@jhu.edu) or Stephen Lauer.
+Questions: Andrew Azman (andrew.azman@unige.ch) or Stephen Lauer.
