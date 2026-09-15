@@ -7,17 +7,17 @@
 #SBATCH --output=./generated_data/sampling_uncert_gridmap_%A_%a.o
 #SBATCH --job-name=sampling_uncert_gridmap
 
-RSCRIPT=/opt/R/3.6.1/bin/Rscript
+## usage: sbatch inst/run-boot-gridmap.sh main
+##        sbatch inst/run-boot-gridmap.sh season
+
+RSCRIPT=${RSCRIPT:-Rscript} # override with the path to your cluster's Rscript if needed
+VARIANT=${1:-main}
 
 echo "Beginning of script"
 date
-# Print the task id.
 echo "My SLURM_ARRAY_TASK_ID: " $SLURM_ARRAY_TASK_ID
 
-# echo "Make sure all packages are installed and data is downloaded"
-# $RSCRIPT --vanilla ./source/install-packages-dl-data.R > ./generated_data/install-packages-dl-data.Rout
-
-$RSCRIPT --vanilla ./source/sampling_uncert_gridmap.R $SLURM_ARRAY_TASK_ID > ./generated_data/sampling_uncert_gridmap.Rout
+$RSCRIPT --vanilla ./source/sampling_uncert_gridmap.R $SLURM_ARRAY_TASK_ID $VARIANT > ./generated_data/sampling_uncert_gridmap_${VARIANT}_$SLURM_ARRAY_TASK_ID.Rout 2>&1
 
 echo "End of script"
 date

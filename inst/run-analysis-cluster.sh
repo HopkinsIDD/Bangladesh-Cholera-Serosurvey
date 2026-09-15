@@ -6,37 +6,32 @@
 #SBATCH --output=./generated_data/bgd-sero-est.o
 #SBATCH --job-name=bgd-sero-est
 
-RSCRIPT=/opt/R/3.6.1/bin/Rscript
+## Steps 1-3 of inst/run-analysis.sh on a SLURM cluster. Then submit
+## inst/run-boot-gridmap.sh (twice: main and season) and run steps 5-8 of
+## inst/run-analysis.sh.
+
+RSCRIPT=${RSCRIPT:-Rscript} # override with the path to your cluster's Rscript if needed
 
 echo "Beginning of script"
 date
 
-RERUN_ANALYSIS=F
-CHAINS=5
+RERUN_ANALYSIS=T
+CHAINS=4
+
+mkdir -p generated_data
 
 echo "Make sure all packages are installed and data is downloaded"
-$RSCRIPT --vanilla ./source/install-packages-dl-data.R > ./generated_data/install-packages-dl-data.Rout
+$RSCRIPT --vanilla ./source/install-packages-dl-data.R > ./generated_data/install-packages-dl-data.Rout 2>&1
 
-echo "Make analysis dataset with raster covariates, probability curves, and model predictions"
-$RSCRIPT --vanilla ./source/generate-analyses-dataset.R $RERUN_ANALYSIS > ./generated_data/generate-analyses-dataset.Rout
+echo "Make analysis dataset with random forest predictions"
+$RSCRIPT --vanilla ./source/generate-analyses-dataset.R $RERUN_ANALYSIS > ./generated_data/generate-analyses-dataset.Rout 2>&1
 
-echo "Estimate cholera incidence in Bangladesh (365-day random forest)"
-$RSCRIPT --vanilla ./source/bgd-estimates-stan.R 365 "rf" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-rf-365.Rout
-
-echo "Estimate cholera incidence in Bangladesh (365-day vibriocidal)"
-$RSCRIPT --vanilla ./source/bgd-estimates-stan.R 365 "vib" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-vib-365.Rout
-
-echo "Estimate cholera incidence in Bangladesh (200-day random forest)"
-$RSCRIPT --vanilla ./source/bgd-estimates-stan.R 200 "rf" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-rf-200.Rout
-
-echo "Estimate cholera incidence in Bangladesh (200-day vibriocidal)"
-$RSCRIPT --vanilla ./source/bgd-estimates-stan.R 200 "vib" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-vib-200.Rout
-
-echo "Estimate cholera incidence in Bangladesh (100-day random forest)"
-$RSCRIPT --vanilla ./source/bgd-estimates-stan.R 100 "rf" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-rf-100.Rout
-
-echo "Estimate cholera incidence in Bangladesh (100-day vibriocidal)"
-$RSCRIPT --vanilla ./source/bgd-estimates-stan.R 100 "vib" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-vib-100.Rout
+for DAYS in 365 200 100; do
+    for DIAG in rf vib; do
+        echo "Estimate cholera seroincidence in Bangladesh ($DAYS-day $DIAG)"
+        $RSCRIPT --vanilla ./source/bgd-estimates-stan.R $DAYS $DIAG youden $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-$DIAG-$DAYS.Rout 2>&1
+    done
+done
 
 echo "End of script"
 date
