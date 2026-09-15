@@ -1,0 +1,29 @@
+# private files (e.g. study id crosswalk) - never commit
+private/
+
+# large or quickly regenerated pipeline outputs (see README.md)
+generated_data/results-*.rds
+generated_data/boot-maps/
+generated_data/boot-maps-season/
+generated_data/forest_no_ogrp_*.rds
+generated_data/dat_with_raster_covs.rds
+generated_data/analysis_age_props.rds
+generated_data/cohort-w-rf-preds-*.csv
+generated_data/univariate_rf.csv
+generated_data/*.Rout
+generated_data/*.log
+generated_data/*.fail
+generated_data/*.err
+
+# rendered reports, figures and knitr caches
+figures/
+tables/
+source/*_cache/
+source/*_files/
+source/*.html
+source/*.pdf
+source/*.tex
+source/*.log
+Rplots.pdf
+.Rhistory
+.DS_Store

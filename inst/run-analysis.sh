@@ -1,43 +1,56 @@
 #!/bin/bash
+## Run the full analysis pipeline on a single machine, from the repository root:
+##   bash inst/run-analysis.sh
+##
+## Each step writes to generated_data/ (logs: generated_data/*.Rout) and skips
+## work whose outputs already exist unless RERUN_ANALYSIS=T. See README.md for
+## run times, memory needs and the order of dependencies.
+## For a SLURM cluster see inst/run-analysis-cluster.sh and inst/run-boot-gridmap.sh.
 
-#SBATCH --mem=30G
-#SBATCH --time=100:00:00
-#SBATCH --ntasks=10
-#SBATCH --output=./generated_data/bgd-sero-est.o
-#SBATCH --job-name=bgd-sero-est
+set -e
 
 echo "Beginning of script"
 date
 
-RERUN_ANALYSIS=F
-CHAINS=5
+RERUN_ANALYSIS=T   # T = refit the random forests even if generated_data/dat_with_raster_covs.rds exists
+CHAINS=4           # Stan chains (1,250 post-warmup draws each)
+N_BOOT=1000        # number of INLA maps (posterior draws) per map type
+BOOT_JOBS=6        # INLA maps to fit in parallel
 
-echo "Make sure all packages are installed and data is downloaded"
-Rscript --vanilla ./source/install-packages-dl-data.R > ./generated_data/install-packages-dl-data.Rout
+mkdir -p generated_data/boot-maps generated_data/boot-maps-season figures tables
 
-echo "Make analysis dataset with raster covariates, probability curves, and model predictions"
-Rscript --vanilla ./source/generate-analyses-dataset.R $RERUN_ANALYSIS > ./generated_data/generate-analyses-dataset.Rout
+echo "1. Install packages and download the cohort data"
+Rscript --vanilla ./source/install-packages-dl-data.R > ./generated_data/install-packages-dl-data.Rout 2>&1
 
-echo "Estimate cholera incidence in Bangladesh (365-day random forest)"
-Rscript --vanilla ./source/bgd-estimates-stan.R 365 "rf" "youden" $CHAINS 2 > ./generated_data/bgd-adjusted-estimate-rf-365.Rout
+echo "2. Build analysis dataset with random forest predictions"
+Rscript --vanilla ./source/generate-analyses-dataset.R $RERUN_ANALYSIS > ./generated_data/generate-analyses-dataset.Rout 2>&1
 
-echo "Estimate cholera incidence in Bangladesh (365-day vibriocidal)"
-Rscript --vanilla ./source/bgd-estimates-stan.R 365 "vib" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-vib-365.Rout
+echo "3. Estimate seroincidence with Stan (random forest and vibriocidal; 365, 200, 100 days)"
+for DAYS in 365 200 100; do
+    for DIAG in rf vib; do
+        echo "   $DIAG, $DAYS days"
+        Rscript --vanilla ./source/bgd-estimates-stan.R $DAYS $DIAG youden $CHAINS 1 \
+            > ./generated_data/bgd-adjusted-estimate-$DIAG-$DAYS.Rout 2>&1
+    done
+done
 
-echo "Estimate cholera incidence in Bangladesh (200-day random forest)"
-Rscript --vanilla ./source/bgd-estimates-stan.R 200 "rf" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-rf-200.Rout
+echo "4. Fit $N_BOOT INLA grid-cell maps for the main and seasonality estimates ($BOOT_JOBS at a time; existing maps are skipped)"
+for VARIANT in main season; do
+    seq 1 $N_BOOT | xargs -P $BOOT_JOBS -I{} sh -c \
+        "Rscript --vanilla ./source/sampling_uncert_gridmap.R {} $VARIANT >> ./generated_data/sampling_uncert_gridmap_${VARIANT}.Rout 2>&1"
+done
 
-echo "Estimate cholera incidence in Bangladesh (200-day vibriocidal)"
-Rscript --vanilla ./source/bgd-estimates-stan.R 200 "vib" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-vib-200.Rout
+echo "5. Leave-one-community-out cross validation of the spatial model"
+Rscript --vanilla ./source/loocv-analysis.R > ./generated_data/loocv-analysis.Rout 2>&1
 
-echo "Estimate cholera incidence in Bangladesh (100-day random forest)"
-Rscript --vanilla ./source/bgd-estimates-stan.R 100 "rf" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-rf-100.Rout
-
-echo "Estimate cholera incidence in Bangladesh (100-day vibriocidal)"
-Rscript --vanilla ./source/bgd-estimates-stan.R 100 "vib" "youden" $CHAINS 1 > ./generated_data/bgd-adjusted-estimate-vib-100.Rout
-
-echo "Estimate risk factor effect sizes (this requires pandoc to run)"
+echo "6. Risk factor models (requires pandoc and LaTeX)"
 Rscript --vanilla -e "rmarkdown::render('source/risk_factors_and_model_comp.Rmd')"
+
+echo "7. Supplement; also summarises the maps into generated_data/grid-cell-data*.rds, INLA-seroincidence-est*.rds and bgd2-seroincidence*.rds (requires pandoc and LaTeX)"
+Rscript --vanilla -e "rmarkdown::render('source/supplement.Rmd')"
+
+echo "8. Main-text estimates, Figures 1-2 (requires pandoc and LaTeX)"
+Rscript --vanilla -e "rmarkdown::render('source/manuscript-estimates.Rmd')"
 
 echo "End of script"
 date
